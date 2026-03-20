@@ -1,0 +1,57 @@
+# S6 평가 체계 설정 (Architecture v1.2 §19)
+
+# === Split 전략 ===
+split:
+  # 기본값: Group+Time Split (Architecture §19.2)
+  default_strategy: group_time_split
+  group_col: pk_file
+  time_col: detection_time
+  test_months: 1
+
+  # 서버 그룹 Split
+  server_group_split:
+    server_col: server_name
+    test_ratio: 0.2
+    seed: 42
+
+  # 이벤트 랜덤 Split (⚠ 디버깅 전용 — 공식 지표 제외)
+  event_random_split:
+    test_size: 0.1
+    seed: 42
+
+# === PoC 성공 기준 ===
+poc_criteria:
+  f1_macro_threshold:    0.70
+  tp_recall_threshold:   0.75
+  fp_precision_threshold: 0.85
+
+# === ECE 목표 ===
+calibration:
+  ece_target: 0.05
+  n_bins: 10
+
+# === ConfidentLearning ===
+confident_learning:
+  n_splits: 5
+  noise_threshold: 0.10
+  confidence_threshold: 0.90
+
+# === KPI 알람 임계값 ===
+kpi_thresholds:
+  # 계층 A: 파이프라인 건전성
+  parse_success_rate_alarm:  0.95  # 미만 시 알람
+  fallback_rate_alarm:       0.10  # 초과 시 알람
+  # 계층 B: 분포 이동
+  oov_rate_raw_alarm:        0.30
+  oov_rate_path_alarm:       0.20
+  confidence_p10_alarm:      0.40
+  # 계층 C: 안전장치
+  review_rate_alarm:         0.35
+  ood_rate_alarm:            0.05
+  rule_conflict_rate_alarm:  0.10
+  auto_fp_precision_alarm:   0.90
+
+# === monthly_metrics.json 저장 경로 ===
+output:
+  monthly_metrics_path: outputs/metrics/monthly_metrics.json
+  reliability_diagram_path: outputs/reliability_diagram.png

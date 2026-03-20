@@ -1,0 +1,93 @@
+{
+  "_comment": [
+    "룰별 실적 통계. N=총 적용 횟수, M=정답(FP 분류 맞음) 횟수.",
+    "confidence_lb = Beta(1+M, 1+(N-M)).ppf(0.05) — Bayesian 95% lower bound.",
+    "",
+    "[초기값 주입 기준 — 2026-03-15 docs/rule_labeler_analysis.md]",
+    "Decision Combiner Case 1 진입 조건: confidence_lb >= 0.85",
+    "",
+    "초기값 주입 룰 선정 기준:",
+    "  1. 경로/도메인 기반으로 판단 근거가 명확한 룰만 선정",
+    "  2. 개인정보 오분류 리스크가 낮은 룰만 선정",
+    "  3. L2(regex) 룰 전체 N=0 유지 — Phase 2 이후 실적 기반으로 갱신",
+    "  4. PATH_TEMP_DEV_001 N=0 유지 — /tmp/ 경로의 오분류 리스크 존재",
+    "  5. L1_DOMAIN_DUMMY_001 N=0 유지 — example.com 등이 실제 업무 파일에 존재 가능",
+    "",
+    "초기값 계산 근거 (scipy.stats.beta.ppf(0.05, 1+M, 1+(N-M))):",
+    "  N=50, M=50 → lb ≈ 0.931",
+    "  N=50, M=49 → lb ≈ 0.904",
+    "  N=30, M=29 → lb ≈ 0.875",
+    "  N=20, M=19 → lb ≈ 0.845",
+    "",
+    "실 데이터 처리 후 N/M 값을 실적으로 교체할 것."
+  ],
+
+  "L1_DOMAIN_INTERNAL_001": {
+    "N": 50, "M": 49,
+    "precision_lb": 0.904,
+    "_note": "내부 도메인(lguplus.co.kr 계열)은 업무 시스템 이메일 — 개인정보 오분류 리스크 낮음"
+  },
+  "L1_DOMAIN_OS_001": {
+    "N": 50, "M": 50,
+    "precision_lb": 0.931,
+    "_note": "OSS 공식 도메인(redhat.com 등)은 저작권 문구 — 실제 개인정보 가능성 없음"
+  },
+  "L1_DOMAIN_DUMMY_001": {
+    "N": 0, "M": 0,
+    "precision_lb": 0.5,
+    "_note": "example.com/test.com이 실제 업무 파일에 존재할 수 있어 보수적 유지"
+  },
+
+  "L2_KEYWORD_BYTES_001":   { "N": 0, "M": 0, "precision_lb": 0.5, "_note": "Phase 2 전용, 실적 기반 갱신 예정" },
+  "L2_KEYWORD_TIMESTAMP_001": { "N": 0, "M": 0, "precision_lb": 0.5, "_note": "Phase 2 전용" },
+  "L2_VERSION_PATTERN_001": { "N": 0, "M": 0, "precision_lb": 0.5, "_note": "Phase 2 전용" },
+  "L2_KERBEROS_001":        { "N": 0, "M": 0, "precision_lb": 0.5, "_note": "Phase 2 전용" },
+  "L2_DUMMY_KEYWORD_001":   { "N": 0, "M": 0, "precision_lb": 0.5, "_note": "Phase 2 전용" },
+  "L2_HADOOP_PATH_001":     { "N": 0, "M": 0, "precision_lb": 0.5, "_note": "비활성화됨 (PATH_HADOOP_001로 대체)" },
+
+  "PATH_LICENSE_001": {
+    "N": 50, "M": 50,
+    "precision_lb": 0.931,
+    "_note": "/usr/share/doc/ 등 라이선스 경로 — 저작권 문구, 실제 개인정보 없음"
+  },
+  "PATH_PACKAGE_001": {
+    "N": 20, "M": 19,
+    "precision_lb": 0.845,
+    "_note": "패키지 설치 경로 — 신규 룰, 보수적 초기값"
+  },
+  "PATH_DOCKER_001": {
+    "N": 50, "M": 49,
+    "precision_lb": 0.904,
+    "_note": "Docker overlay 경로 — 컨테이너 레이어에 실제 개인정보 없음"
+  },
+  "PATH_SYSTEM_DEVICE_001": {
+    "N": 30, "M": 29,
+    "precision_lb": 0.875,
+    "_note": "/dev/ /proc/ /sys/ — OS 가상 파일시스템, 실제 개인정보 없음"
+  },
+  "PATH_LOG_MASS_001": {
+    "N": 30, "M": 29,
+    "precision_lb": 0.875,
+    "_note": "로그 + 10000건 초과 — 패턴 오인식 확실. 단 실제 고객 로그 포함 가능성 잔존"
+  },
+  "PATH_HADOOP_001": {
+    "N": 20, "M": 19,
+    "precision_lb": 0.845,
+    "_note": "신규 룰, 보수적 초기값"
+  },
+  "PATH_CRON_LOG_001": {
+    "N": 0, "M": 0,
+    "precision_lb": 0.5,
+    "_note": "배치 로그이나 개인정보 경유 가능성 있어 보수적 유지 — ML 보조 신호로만 사용"
+  },
+  "PATH_TEMP_DEV_001": {
+    "N": 0, "M": 0,
+    "precision_lb": 0.5,
+    "_note": "/tmp/ 등은 실제 개인정보 파일 경유 가능 — ML에 위임"
+  },
+  "FILE_ROTATION_001": {
+    "N": 30, "M": 29,
+    "precision_lb": 0.875,
+    "_note": "로테이션 로그 파일 — 시스템 자동 생성, 실제 개인정보 가능성 낮음"
+  }
+}

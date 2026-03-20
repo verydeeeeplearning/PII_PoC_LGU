@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual env
+venv/
+test_venv_check/
+.venv/
+
+# Data (large files)
+data/raw/
+data/processed/*.parquet
+data/features/*.npz
+data/features/*.parquet
+data/checkpoints/
+
+# Models (large binaries)
+models/*.joblib
+models/final/
+models/checkpoints/
+
+# Outputs (generated)
+outputs/*.png
+outputs/*.xlsx
+outputs/*.csv
+figures/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Temp
+*.tar
+image*.png

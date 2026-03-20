@@ -1,0 +1,54 @@
+# config/label_mapping.yaml
+#
+# fp_description → 다중 클래스 매핑 테이블
+#
+# ─────────────────────────────────────────────────────────────
+# [수동 작업 대기 중 — 에이전트 작성 불가]
+#
+# 이 파일은 fp_description 그룹화 수동 작업 완료 후 채워야 한다.
+#
+# 작업 순서:
+#   1. python scripts/run_phase0_validation.py 실행
+#   2. outputs/phase0/fp_description_unique_list.csv 열람
+#      → 전체 unique fp_description 값 + 빈도 + 조직별 분포 확인
+#   3. 각 fp_description 값에 대해 아래 매핑 기준으로 직접 기입:
+#      - class_phase1: FP-시스템로그 / FP-라이선스/저작권 / FP-개발/테스트 / FP-기타 중 선택
+#      - class_phase2: Architecture.md §12의 Canonical 8클래스 중 선택
+#   4. 주의 사항:
+#      - 50건 미만 클래스는 단독 클래스 대신 FP-기타에 통합
+#      - 조직 간 동의어 통일 (예: CTO "서비스 로그" ≈ NW "네트워크 로그" → 동일 클래스)
+#      - 작성 후 scripts/run_training.py --phase1 로 클래스 분포 확인
+#
+# ─────────────────────────────────────────────────────────────
+#
+# 작성 예시 (실제 값은 데이터 확인 후 기입):
+#
+# fp_description_mapping:
+#   "숫자 나열":
+#     class_phase1: "FP-기타"
+#     class_phase2: "FP-숫자나열/코드"
+#     note: "텍스트 컨텍스트 없이 경로 기반 분류 불가 → Phase 2에서 세분화"
+#
+#   "타임스탬프":
+#     class_phase1: "FP-기타"
+#     class_phase2: "FP-타임스탬프"
+#     note: "텍스트 컨텍스트(expiry/timestamp 키워드) 필요 → Phase 2에서 세분화"
+#
+#   "bytes 크기":
+#     class_phase1: "FP-기타"
+#     class_phase2: "FP-bytes크기"
+#     note: "텍스트 컨텍스트(bytes 키워드) 필요 → Phase 2에서 세분화"
+#
+#   "서비스 로그":
+#     class_phase1: "FP-시스템로그"
+#     class_phase2: "FP-패턴맥락"
+#     note: "경로 기반 부분 분리 가능"
+#
+#   "라이선스 파일":
+#     class_phase1: "FP-라이선스/저작권"
+#     class_phase2: "FP-OS저작권"
+#     note: "경로(/usr/share/doc/, /license/) 기반 분리 가능"
+#
+# ─────────────────────────────────────────────────────────────
+
+fp_description_mapping: {}  # 수동 작성 전까지 빈 dict 유지

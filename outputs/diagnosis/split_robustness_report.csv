@@ -1,0 +1,3 @@
+﻿split,desc,f1_macro,train_n,test_n
+random_group,GroupShuffleSplit(pk_file) -- 현재 기본값,1.0,121,31
+server_group,server_group_split(0.3),0.9688269073010665,114,38

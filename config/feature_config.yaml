@@ -1,0 +1,251 @@
+# Feature / Data config for PII False Positive Reduction
+#
+# This project runs in an air-gapped Linux x86_64 environment.
+# The code uses defaults in `src/utils/constants.py`, but will override them
+# when values are present in this YAML.
+#
+# Architecture.md v1.2 반영: full_context_raw, Bronze/Silver 레이어, Multi-view TF-IDF
+# 회의록 2026-01 반영: 복합 PK, 3개 데이터셋 구조
+
+data:
+  # === PK 설정 (회의록 확정: 서버명 + IP + 파일경로) ===
+  pk_columns:
+    primary:
+      - server_name
+      - agent_ip
+      - file_path
+    fallback:
+      - detection_id  # 단일 키 fallback (기존 호환)
+
+  # === 표준 컬럼명 (Architecture §3) ===
+  text_column: full_context_raw          # 기존: detected_text_with_context
+  label_column: label
+  file_path_column: file_path
+  pattern_type_column: pattern_type      # PII 유형 (주민번호/이메일/휴대폰)
+  encoding: utf-8
+
+  # === 기본 파일명 ===
+  detection_file: detection_results.csv
+  label_file: labels.csv
+
+  # === Bronze/Silver 출력 경로 (Architecture §4) ===
+  output:
+    bronze_events: "data/processed/bronze_events.parquet"
+    bronze_labels: "data/processed/bronze_labels.parquet"
+    silver_detections: "data/processed/silver_detections.parquet"
+    silver_quarantine: "data/processed/silver_quarantine.parquet"
+
+  # === Schema Registry 경로 ===
+  schema_registry: "config/schema_registry.yaml"
+
+  # === Parse KPI 임계값 (Architecture §6) ===
+  parse_kpi:
+    min_parse_success_rate: 0.95
+
+  # === pii_type_inferred 설정 (Architecture §3) ===
+  # ⚠️ 회의록 2026-01 주의사항:
+  #   Server-i의 패턴 종류 필드 신뢰도 이슈가 확인됨.
+  #   예: 이메일 패턴(@redhat.com)이 "주민번호"로 분류되는 케이스 다수
+  #   원인: Kerberos 토큰 내 숫자(duration: 1484*****, xpiryDate=170603*****)가
+  #         주민번호 정규식에 매칭됨
+  pii_type_inferred:
+    enabled: true
+    source_column: "패턴 종류"   # Dataset B 원본 필드 (신뢰도 낮음)
+
+# === 데이터셋별 설정 (회의록 3개 데이터셋) ===
+datasets:
+  # 데이터셋 A: Server-i 검출 원본
+  dataset_a:
+    name: "Server-i 검출 원본"
+    path: data/raw/dataset_a/
+    file_pattern: "*.csv"
+    encoding: utf-8
+    columns_mapping:
+      server_name: dfile_computername
+      agent_ip: dfile_agentip
+      file_path: dfile_filedirectedpath
+      detected_text: dfile_inspectedcontent
+      full_context_raw: dfile_inspectcontentwithcontext    # 기존: detected_text_with_context
+      pattern_type: dfile_patternname
+      detection_count: dfile_inspectcount
+      detection_id: dfile_guid
+      username: dfile_username
+      event_time: dfile_createdate                         # 시간 기반 Split 기준 컬럼
+
+  # 데이터셋 B: 소만사 오탐 레이블링 (✅ 활용 확정)
+  # 회의록 확인: 오탐case정리_260121.xlsx
+  dataset_b:
+    name: "소만사 오탐 레이블링"
+    path: data/raw/dataset_b/
+    file_pattern: "*.xlsx"
+    encoding: utf-8
+    use_for_training: true
+    columns_mapping:
+      row_number: "(번호)"              # A열: 순번
+      identifier: "(식별자)"            # B열: 고유 식별 정보 (잠재적 PK)
+      file_name: "파일 명"              # C열: 검출 대상 파일명
+      full_context_raw: "검출 내역"    # D열: 마스킹된 검출 패턴 원문 (기존: detected_text_with_context)
+      pattern_type: "패턴 종류"         # E열: PII 유형 (⚠️ 신뢰도 이슈 있음)
+      label: "판단근거"                 # F열: 오탐 사유 (7개 클래스)
+
+  # 데이터셋 C: 현업 피드백 회신 (❌ v1.2 확정 제외)
+  dataset_c:
+    name: "현업 피드백 회신"
+    status: "excluded"               # v1.2 확정: 활용 제외 (기존: use_for_training: false)
+    path: data/raw/dataset_c/
+    file_pattern: "*.xlsx"
+    encoding: utf-8
+    use_for_training: false          # 하위 호환 유지
+    columns_mapping:
+      server_name: "서버명"
+      agent_ip: "에이전트 IP"
+      file_path: "파일 경로"
+      detection_count: "검출 건수"
+      pattern_type: "패턴 종류"
+      feedback: "패턴 내용"
+      jumin_count: "주민 등록 번호 개수"
+      phone_count: "핸드폰 번호 개수"
+      email_count: "E-Mail 주소 개수"
+      file_created_at: "파일 생성 일자"
+
+# === 패턴 종류 매핑 (Server-i → 표준) ===
+# ⚠️ 회의록 2026-01 주의사항:
+#   Server-i의 패턴 종류 필드 신뢰도 이슈가 확인됨.
+#   TODO: 검출 내역(텍스트) 기반으로 패턴 종류를 재분류하는 검증 로직 구현 필요
+pattern_type_mapping:
+  "주민등록 번호": "주민등록번호"
+  "주민등록번호": "주민등록번호"
+  "핸드폰 번호": "휴대폰번호"
+  "핸드폰번호": "휴대폰번호"
+  "휴대폰 번호": "휴대폰번호"
+  "휴대폰번호": "휴대폰번호"
+  "E-Mail": "이메일"
+  "이메일": "이메일"
+  "E-Mail 주소": "이메일"
+
+# === Multi-view TF-IDF 설정 (Architecture §12) ===
+# 3개 텍스트 뷰: raw_text / shape_text / path_text
+features:
+  tfidf:
+    raw_text:                        # keyword/domain signal
+      max_features: 5000
+      ngram_range: [1, 2]
+      min_df: 3
+      max_df: 0.95
+    shape_text:                      # structural pattern signal
+      max_features: 2000
+      ngram_range: [1, 3]
+      min_df: 2
+      max_df: 0.98
+    path_text:                       # file path context signal
+      max_features: 1000
+      ngram_range: [1, 2]
+      min_df: 2
+      max_df: 0.95
+
+# === 구버전 단일 TF-IDF (src/utils/constants.py 하위 호환용) ===
+tfidf:
+  max_features: 5000
+  ngram_range: [1, 2]
+  min_df: 3
+  max_df: 0.95
+
+keywords:
+  groups:
+    has_test_keyword: ["test", "테스트", "tset", "testing"]
+    has_sample_keyword: ["sample", "샘플", "example", "예시", "예제"]
+    has_dev_keyword: ["dev", "debug", "개발", "mock", "dummy", "stub"]
+    has_temp_keyword: ["temp", "tmp", "임시", "temporary"]
+    has_doc_keyword: ["문서", "매뉴얼", "manual", "guide", "가이드"]
+    has_system_keyword: ["system", "시스템", "auto", "generated", "자동"]
+    has_sequential_digits: ["000", "111", "123", "1234", "0000"]
+
+# === 평가 및 스플릿 설정 (Architecture §14) ===
+evaluation:
+  poc_f1_macro_threshold: 0.70
+  poc_tp_recall_threshold: 0.75
+  poc_fp_precision_threshold: 0.85
+
+  # 공식 평가 스플릿 전략 (Architecture §14)
+  split_strategy:
+    official:                        # 공식 평가 보고에 사용할 스플릿
+      - "pk_file_group_split"        # GroupShuffleSplit on pk_file (Leakage 방지)
+      - "time_split"                 # 시간 기반 정렬 후 분할 (운영 시나리오)
+    exploratory:                     # 탐색/개발용 (공식 메트릭 사용 금지)
+      - "stratified_kfold"
+    random_split: false              # 공식 메트릭에서 제외 (pk_file Leakage 우려)
+    test_size: 0.2
+    time_column: "event_time"        # Time Split 기준 컬럼
+
+# === 구버전 스플릿 설정 (src/utils/constants.py 하위 호환용) ===
+split:
+  random_seed: 42
+  test_size: 0.2
+
+viz:
+  font_family: Malgun Gothic   # Windows 기본 한글 폰트 (서버 Linux: NanumGothic으로 변경)
+  figure_dpi: 150
+
+# ─────────────────────────────────────────────────────────────
+# [TODO — Phase 1-B 구현 시 반영할 섹션]
+#
+# Phase 1 레이블 단독 모드 전용 메타데이터 피처 설정.
+# 자세한 내용: docs/plans/PLAN_strategy-reorientation-phase0-phase1.md §Phase 1-B
+#
+# 아래 섹션을 추가할 것:
+#
+# phase1_metadata_features:
+#   # 경로 구조 (~9개)
+#   path:
+#     - top_dir_type          # 최상위 디렉토리 유형 카테고리
+#     - path_depth
+#     - is_log_path
+#     - is_temp_path
+#     - is_docker_overlay
+#     - has_license_path
+#     - has_business_token    # 조직 도메인 토큰 (lguplus, lgup 등)
+#     - has_system_token      # 시스템 경로 토큰 (kernel, systemd, hadoop 등)
+#     - has_date_in_path
+#   # 파일명 (~5개)
+#   filename:
+#     - extension
+#     - has_date
+#     - has_hash
+#     - has_rotation_num
+#     - is_log_file
+#   # 서버/환경 (~2개)
+#   server:
+#     - env_group             # dev/stg/sbx/prod/unknown (server_name 파싱)
+#     - subnet_group          # agent_ip 첫 두 옥텟 기반
+#   # 검출 통계 (~7개)
+#   detection:
+#     - pattern_count_log1p
+#     - pattern_count_bin
+#     - is_mass_detection
+#     - is_extreme_detection
+#     - ssn_count
+#     - phone_count
+#     - email_count
+#     - pii_type_ratio        # ssn:phone:email 비율 (3개 float)
+#   # 시간 (~4개)
+#   time:
+#     - hour
+#     - weekday
+#     - is_weekend
+#     - month
+#   # 집계 (~2개)
+#   aggregation:
+#     - file_event_count      # pk_file당 이벤트 수
+#     - file_pii_diversity    # pk_file 내 PII 유형 종류 수
+#
+# env_group_patterns:
+#   dev: ["dev", "develop", "development"]
+#   stg: ["stg", "stage", "staging", "uat"]
+#   sbx: ["sbx", "sandbox", "poc"]
+#   prod: ["prd", "prod", "production", "live"]
+#   # unknown: 위 패턴 미매칭 시 자동 할당
+#
+# [TODO — fp_description 그룹화 수동 작업 완료 후]
+# fp_description 기반 클래스 피처를 이 섹션에 추가할 것.
+# config/label_mapping.yaml의 fp_description_mapping 참조.
+# ─────────────────────────────────────────────────────────────

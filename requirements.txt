@@ -1,0 +1,37 @@
+# =============================================================================
+# PII False Positive Reduction - Python Dependencies
+# =============================================================================
+# Python Version: 3.12 (Miniconda3 기본)
+# Target: Linux x86_64 (폐쇄망)
+# =============================================================================
+
+# ── 데이터 처리 ──
+numpy==1.26.4
+pandas==2.2.3
+scipy==1.13.1
+
+# ── ML 모델링 ──
+scikit-learn==1.5.2
+xgboost==2.1.4
+lightgbm==4.5.0
+imbalanced-learn==0.12.4
+joblib==1.4.2
+
+# ── 시각화 ──
+matplotlib==3.9.4
+seaborn==0.13.2
+
+# ── 유틸리티 ──
+pyyaml==6.0.1
+tqdm==4.67.1
+
+# ── 파일 I/O ──
+openpyxl==3.1.5
+et_xmlfile==2.0.0
+pyarrow==20.0.0
+
+# ── 테스트 ──
+pytest==9.0.2
+iniconfig==2.3.0
+pluggy==1.6.0
+

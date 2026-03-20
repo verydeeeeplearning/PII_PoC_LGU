@@ -1,0 +1,14 @@
+=== Phase 0 라벨 충돌 상세 리포트 ===
+생성 시각: 2026-03-20 18:21:51
+
+[라벨 충돌률]
+  전체 피처 그룹: 148
+  충돌 그룹:       0
+  충돌률:          0.0000 (0.00%)
+
+[Bayes Error 하한]
+  bayes_error_lb: 0.0000
+  해석: 0.0=완전분리, 0.5=완전혼재
+
+[사용된 피처 컬럼]
+  pattern_count, ssn_count, phone_count, email_count

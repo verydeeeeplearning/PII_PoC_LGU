@@ -1,0 +1,197 @@
+# 한글 컬럼명 → 영문 snake_case 정규화 테이블
+#
+# 기반: EDA 인사이트 리포트 §2-1 (2026-02-26)
+# 대상: 레이블 Excel I~R열 (서버이름~파일크기)
+#
+# 주의: 조직/월별로 한글 컬럼명 표기가 미세하게 다를 수 있음.
+# 새로운 표기를 발견하면 해당 항목의 aliases에 추가할 것.
+#
+# 필드 설명:
+#   primary: 가장 많이 쓰이는 표기
+#   aliases: 같은 의미의 다른 표기 목록
+#   drop: true → 로딩 후 자동 제거 (file_size: 100% 결측)
+
+mappings:
+
+  organization:
+    primary: "조직"
+    aliases: []
+
+  ops_dept:
+    primary: "운영/클렌징 부서"
+    aliases:
+      - "운영 부서"
+      - "클렌징 부서"
+
+  service:
+    primary: "서비스"
+    aliases: []
+
+  label_review:
+    primary: "오탐여부(정탐/오탐)"
+    aliases:
+      - "오탐 여부(정탐/오탐)"
+
+  server_name:
+    primary: "서버이름"
+    aliases:
+      - "서버명"
+      - "서버 이름"
+      - "서버 명"
+      - "ServerName"
+      - "server name"
+
+  agent_ip:
+    primary: "에이전트IP"
+    aliases:
+      - "에이전트 IP"
+      - "에이전트ip"
+      - "에이전트Ip"
+      - "AgentIP"
+      - "Agent IP"
+      - "에이전트 아이피"
+
+  file_path:
+    primary: "파일경로"
+    aliases:
+      - "파일 경로"
+      - "FilePath"
+      - "file path"
+
+  file_name:
+    primary: "파일이름"
+    aliases:
+      - "파일 이름"
+      - "파일명"
+      - "파일 명"
+      - "FileName"
+      - "file name"
+
+  pattern_count:
+    primary: "패턴개수"
+    aliases:
+      - "패턴 개수"
+      - "패턴수"
+      - "패턴 수"
+      - "PatternCount"
+
+  ssn_count:
+    primary: "주민등록번호개수"
+    aliases:
+      - "주민등록번호 개수"
+      - "주민번호개수"
+      - "주민번호 개수"
+      - "주민 등록 번호 개수"
+      - "SSN개수"
+
+  phone_count:
+    primary: "핸드폰번호개수"
+    aliases:
+      - "핸드폰번호 개수"
+      - "핸드폰 번호 개수"
+      - "휴대폰번호개수"
+      - "휴대폰 번호 개수"
+      - "휴대폰번호 개수"
+      - "핸드폰개수"
+      - "전화 번호 개수"
+      - "핸드폰 번호"
+
+  email_count:
+    primary: "이메일주소개수"
+    aliases:
+      - "이메일 주소 개수"
+      - "이메일주소 개수"
+      - "이메일개수"
+      - "이메일 개수"
+      - "E-Mail 주소 개수"
+      - "Email개수"
+
+  file_created_at:
+    primary: "파일생성일시"
+    aliases:
+      - "파일 생성일시"
+      - "파일 생성 일시"
+      - "파일생성일자"
+      - "파일 생성 일자"
+      - "생성일시"
+      - "생성 일시"
+      - "FileCreatedAt"
+
+  file_size:
+    primary: "파일크기"
+    aliases:
+      - "파일 크기"
+      - "크기"
+      - "FileSize"
+    drop: true  # R열: 100% 결측 → 자동 제거
+
+  fp_description:
+    primary: "오탐: 오탐 설명(검토 후 예외처리 목적)정탐: 삭제조치 OR 삭제불가 사유"
+    aliases:
+      - "오탐: 오탐 설명(검토 후 예외처리 목적)\n정탐: 삭제조치 OR 삭제불가 사유"
+      - "오탐/정탐 설명 및 조치 현황 (담당자별 기입)"
+      - "오탐/정탐 설명 및 조치현황 (담당자별 기입)"
+      - "오탐/정탐 설명 및 조치 현황(담당자별 기입)"
+      - "오탐/정탐 설명 및 조치현황(담당자별 기입)"
+      - "오탐설명"
+      - "오탐 설명"
+      - "오탐/정탐 설명"
+      - "오탐 설명 및 조치"
+      - "설명 및 조치 현황"
+
+  foreign_id_count:
+    primary: "외국인등록번호개수"
+    aliases:
+      - "외국인 등록 번호 개수"
+
+  drivers_license_count:
+    primary: "운전면허번호개수"
+    aliases:
+      - "운전 면허 번호 개수"
+
+  passport_count:
+    primary: "여권번호개수"
+    aliases:
+      - "여권 번호 개수"
+      - "신규 여권 번호 개수"
+
+  account_count:
+    primary: "계좌번호개수"
+    aliases:
+      - "계좌 번호 개수"
+      - "계좌 번호 (확장) 개수"
+
+  credit_card_count:
+    primary: "신용카드번호개수"
+    aliases:
+      - "신용 카드 번호 개수"
+
+  ip_count:
+    primary: "IP주소개수"
+    aliases:
+      - "IP 주소 개수"
+
+  corporate_reg_count:
+    primary: "법인등록번호개수"
+    aliases:
+      - "법인 등록 번호 개수"
+
+  business_reg_count:
+    primary: "사업자등록번호개수"
+    aliases:
+      - "사업자 등록 번호 개수"
+
+  health_insurance_count:
+    primary: "건강보험증번호개수"
+    aliases:
+      - "건강 보험증 번호 개수"
+
+  exception_requested:
+    primary: "예외요청"
+    aliases:
+      - "예외 요청"
+
+  retention_period:
+    primary: "파일 보관기간"
+    aliases:
+      - "보관기간"

@@ -1,0 +1,99 @@
+# Model config for PII False Positive Reduction
+#
+# The trainer dynamically sets `num_class` based on the label encoder.
+# You can override default hyperparameters here.
+
+xgboost:
+  default_params:
+    objective: multi:softprob
+    eval_metric: mlogloss
+    n_estimators: 500
+    max_depth: 6
+    learning_rate: 0.1
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_weight: 1
+    n_jobs: -1
+    verbosity: 0
+
+lightgbm:
+  default_params:
+    objective: multiclass
+    metric: multi_logloss
+    n_estimators: 500
+    num_leaves: 31
+    learning_rate: 0.1
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_samples: 20
+    n_jobs: -1
+    verbose: -1
+
+tuning:
+  n_iter: 30
+  cv_folds: 3
+  xgb_param_grid:
+    n_estimators: [100, 300, 500, 700]
+    max_depth: [3, 5, 6, 7, 8]
+    learning_rate: [0.01, 0.05, 0.1]
+    subsample: [0.7, 0.8, 0.9]
+    colsample_bytree: [0.7, 0.8, 0.9]
+    min_child_weight: [1, 3, 5]
+
+training:
+  top_n_features: 30
+  early_stopping_rounds: 30
+
+# === Calibration 설정 (Architecture §8) ===
+# ML 모델의 예측 확률을 보정하여 신뢰도 점수 신뢰성 향상
+calibration:
+  enabled: true
+  method: "isotonic"         # "isotonic" | "sigmoid"
+  cv: 5
+
+# === OOD (Out-of-Distribution) Score 설정 (Architecture §9) ===
+# 학습 분포에서 벗어난 샘플 탐지
+ood:
+  enabled: true
+  threshold: 0.3             # ood_score >= 0.3 → ood_flag=1
+  method: "isolation_forest" # "isolation_forest" | "mahalanobis"
+
+# === UNKNOWN 라우팅 임계값 (Architecture §9) ===
+# "애매하면 TP" 원칙: UNKNOWN 후보 중 risk_flag=1이면 TP로 오버라이드
+unknown_routing:
+  tau_confidence_low: 0.4    # ML confidence < 0.4 AND no RULE match → UNKNOWN 후보
+  tau_ood_high: 0.3          # ood_flag=1 → UNKNOWN 후보
+  tp_override_enabled: true  # UNKNOWN 후보 중 risk_flag=1 → TP-실제개인정보 강제 분류
+
+# === Synth Tier 설정 (합성 변수 확장) ===
+synth:
+  tier: "standard"           # "minimal" | "standard" | "full"
+  enabled: true
+
+# ─────────────────────────────────────────────────────────────
+# [TODO — Phase 1-C 구현 시 반영할 섹션]
+#
+# Selective Classification (Phase 1 레이블 단독 모드) 설정.
+# 자세한 내용: docs/plans/PLAN_strategy-reorientation-phase0-phase1.md §Phase 1-C
+#
+# 아래 섹션을 추가할 것:
+#
+# phase1_classes:
+#   # Phase 0 완료 + fp_description 그룹화 완료 후 확정
+#   # 잠정 5-class 체계:
+#   - "TP-실제개인정보"
+#   - "FP-시스템로그"
+#   - "FP-라이선스/저작권"
+#   - "FP-개발/테스트"
+#   - "FP-기타"
+#
+# selective_classification:
+#   tau_default: 0.9             # 초기 임계값 (Phase 0 데이터로 재최적화 필요)
+#   target_precision: 0.95       # Auto-FP precision 하한 (비타협)
+#   target_coverage: 0.40        # Phase 1 목표 coverage
+#   tp_safety_rate_min: 0.99     # TP Safety Rate 하한
+#
+# [TODO — fp_description 그룹화 수동 작업 완료 후]
+# phase1_classes를 5-class 잠정 체계에서 실제 데이터 기반 클래스로 업데이트할 것.
+# config/label_mapping.yaml의 fp_description_mapping 작성 완료 후 반영.
+# ─────────────────────────────────────────────────────────────

@@ -1,0 +1,10 @@
+﻿config,f1_macro,n_features
+full,1.0,30
+full - server,1.0,29
+full - path,1.0,13
+full - time,1.0,26
+full - count,0.9676071055381401,25
+full - server&path,1.0,12
+server only,0.8046218487394958,1
+path only,0.9028213166144201,17
+count only,1.0,5

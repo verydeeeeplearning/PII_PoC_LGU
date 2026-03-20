@@ -1,0 +1,46 @@
+# 레이블 데이터 수집 설정
+#
+# 실제 폴더 구조 (2026-03-11 확인):
+#   data/raw/label/
+#     25년 정탐 (3월~12월)/
+#       3월/  정탐 취합 보고 자료_3월_CTO.xlsx, 정탐 취합 보고 자료_3월_NW부문.xlsx, ...
+#       4월/
+#       ...
+#       12월/
+#     25년 오탐 (3월~12월)/
+#       3월/  오탐 취합 보고 자료_3월_CTO.xlsx, ...
+#       ...
+#       12월/
+#
+# TP/FP 판별 기준: 최상위 폴더명에 "정탐"/"오탐" 포함 여부
+# organization 컬럼: 사용 안 함 (폴더 구조 변경 + 사용자 확인)
+
+label_data:
+  root: "data/raw/label"
+
+  # TP/FP 폴더 키워드 (최상위 폴더명에 포함 여부로 판별)
+  tp_folder_keyword: "정탐"
+  fp_folder_keyword: "오탐"
+
+  # pk_event 5-field (EDA 인사이트 리포트 §2-5)
+  pk_event_fields:
+    - "server_name"
+    - "agent_ip"
+    - "file_path"
+    - "file_name"
+    - "file_created_at"
+
+  # 멀티시트 Excel: 아래 컬럼 중 하나라도 있는 시트를 유효 시트로 판단
+  # (한글 원본명 또는 영문 정규화명 모두 허용)
+  sheet_required_cols:
+    - "server_name"
+    - "서버이름"
+    - "서버명"
+    - "서버 이름"
+
+  # Excel 읽기 옵션 (실제 레이블 파일 구조 대응)
+  excel_read:
+    # header_row: 헤더 행 위치 (0-indexed). 1 = Excel 2행 = 상단 타이틀 행 건너뜀
+    header_row: 1
+    # skip_first_col: 첫 번째 컬럼 제거 여부 (연번/순번 등 일련번호 컬럼 스킵)
+    skip_first_col: true

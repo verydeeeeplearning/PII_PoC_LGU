@@ -1,0 +1,22 @@
+﻿column,dtype,null_ratio,cardinality,label_purity,model_input,risk_level
+organization,str,0.0,2,0.5,N,Safe (unused)
+ops_dept,str,0.0,6,0.539,N,Safe (unused)
+service,str,0.0,6,0.557,N,Safe (unused)
+label_review,str,0.0,2,1.0,N,Post-label artifact
+fp_description,str,0.0,10,1.0,N,Post-label artifact
+exception_requested,str,0.0,2,0.819,N,Post-label artifact
+retention_period,str,0.0,5,0.906,N,Safe (unused)
+server_name,str,0.0,50,1.0,Y,Target proxy
+agent_ip,str,0.0,120,1.0,N,Safe (unused)
+pattern_count,int64,0.0,121,0.979,Y,Target proxy
+file_path,str,0.0,30,1.0,Y,Target proxy
+file_name,str,0.0,102,1.0,Y,Target proxy
+ssn_count,int64,0.0,101,0.978,Y,Target proxy
+phone_count,int64,0.0,53,0.977,Y,Target proxy
+email_count,int64,0.0,52,0.93,Y,Possible leakage
+file_created_at,datetime64[ns],0.0,152,1.0,Y,Target proxy
+label_raw,str,0.0,2,1.0,N,TARGET
+label_work_month,str,0.0,2,0.5,N,Post-label artifact
+_source_file,str,0.0,8,1.0,N,Post-label artifact
+pk_file,str,0.0,152,1.0,N,PK (safe)
+pk_event,str,0.0,152,1.0,N,PK (safe)

@@ -1,0 +1,195 @@
+모델 성능 신뢰성 진단 - Column-wise
+진단 시각: 2026-03-20 13:17:52
+대상: silver_label.parquet (152행 x 21열)
+
+======================================================================
+A-1. 범주형 컬럼 × label_raw (Cramer's V + 단일클래스 비율)
+======================================================================
+
+  [server_name] *** DANGER: label proxy 가능성 ***
+    Cramer's V:     1.0000
+    고유값 수:      50
+    단일클래스 그룹: 50 (100.0%)
+    상위 10개 값:
+      lgup-prd-app04                            n=     6  FP=0.00  TP=1.00
+      lgup-prd-app03                            n=     6  FP=0.00  TP=1.00
+      lgup-prd-app05                            n=     6  FP=0.00  TP=1.00
+      lgup-prd-app06                            n=     6  FP=0.00  TP=1.00
+      lgup-prd-mms02                            n=     6  FP=0.00  TP=1.00
+      lgup-prd-mms01                            n=     6  FP=0.00  TP=1.00
+      lgup-prd-mms07                            n=     6  FP=0.00  TP=1.00
+      lgup-prd-mms06                            n=     6  FP=0.00  TP=1.00
+      lgup-prd-app02                            n=     5  FP=0.00  TP=1.00
+      lgup-prd-mms03                            n=     5  FP=0.00  TP=1.00
+    [저장] server_label_crosstab.csv (50개 서버)
+
+  [organization]
+    Cramer's V:     0.0000
+    고유값 수:      2
+    단일클래스 그룹: 0 (0.0%)
+    상위 10개 값:
+      CTO                                       n=    76  FP=0.50  TP=0.50
+      NW부문                                      n=    76  FP=0.50  TP=0.50
+
+  [service]
+    Cramer's V:     0.1367
+    고유값 수:      6
+    단일클래스 그룹: 0 (0.0%)
+    상위 10개 값:
+      AI메시징허브                                   n=    28  FP=0.57  TP=0.43
+      모바일인증                                     n=    28  FP=0.43  TP=0.57
+      문자중계                                      n=    28  FP=0.57  TP=0.43
+      NW관제                                      n=    25  FP=0.52  TP=0.48
+      MMS 운영                                    n=    23  FP=0.39  TP=0.61
+      비디오 포털(신동향)검색                             n=    20  FP=0.50  TP=0.50
+
+  [label_work_month]
+    Cramer's V:     0.0000
+    고유값 수:      2
+    단일클래스 그룹: 0 (0.0%)
+    상위 10개 값:
+      6월                                        n=    76  FP=0.50  TP=0.50
+      7월                                        n=    76  FP=0.50  TP=0.50
+    [저장] month_label_crosstab.csv
+
+  [_source_file] *** DANGER: label proxy 가능성 ***
+    Cramer's V:     1.0000
+    고유값 수:      8
+    단일클래스 그룹: 8 (100.0%)
+    상위 10개 값:
+      오탐 취합 보고 자료_6월_CTO.xlsx                   n=    19  FP=1.00  TP=0.00
+      오탐 취합 보고 자료_6월_NW부문.xlsx                  n=    19  FP=1.00  TP=0.00
+      오탐 취합 보고 자료_7월_CTO.xlsx                   n=    19  FP=1.00  TP=0.00
+      오탐 취합 보고 자료_7월_NW부문.xlsx                  n=    19  FP=1.00  TP=0.00
+      정탐 취합 보고 자료_6월_CTO.xlsx                   n=    19  FP=0.00  TP=1.00
+      정탐 취합 보고 자료_6월_NW부문.xlsx                  n=    19  FP=0.00  TP=1.00
+      정탐 취합 보고 자료_7월_CTO.xlsx                   n=    19  FP=0.00  TP=1.00
+      정탐 취합 보고 자료_7월_NW부문.xlsx                  n=    19  FP=0.00  TP=1.00
+
+======================================================================
+A-2. 수치형 컬럼 × label_raw (분포 비교)
+======================================================================
+
+  [pattern_count]
+    TP: mean=119.88  median=121.00  std=41.97  n=76
+    FP: mean=1126.99  median=145.00  std=1880.60  n=76
+    Mann-Whitney U p-value: 0.575388  (비유의)
+
+  [ssn_count]
+    TP: mean=49.05  median=37.00  std=45.55  n=76
+    FP: mean=1118.55  median=145.00  std=1885.57  n=76
+    Mann-Whitney U p-value: 0.022415  (유의)
+
+  [phone_count]
+    TP: mean=40.87  median=28.50  std=31.80  n=76
+    FP: mean=1.32  median=0.00  std=3.53  n=76
+    Mann-Whitney U p-value: 0.000000  (유의)
+
+  [email_count]
+    TP: mean=29.96  median=23.00  std=28.05  n=76
+    FP: mean=7.12  median=0.00  std=17.69  n=76
+    Mann-Whitney U p-value: 0.000000  (유의)
+
+======================================================================
+A-3. 경로/메타 이진 피처 × label_raw
+======================================================================
+  [피처 계산 중...] build_meta_features + extract_path_features
+  is_log_file                          V=0.469  flag=1→TP:0.00 FP:1.00  (n=29) !!!
+  is_docker_overlay                    V=0.254  flag=1→TP:0.00 FP:1.00  (n=11)
+  has_license_path                     V=0.239  flag=1→TP:0.00 FP:1.00  (n=10)
+  is_temp_or_dev                       V=0.223  flag=1→TP:0.00 FP:1.00  (n=9)
+  has_cron_path                        V=0.239  flag=1→TP:0.00 FP:1.00  (n=10)
+  has_business_token                   V=0.679  flag=1→TP:0.95 FP:0.05  (n=57) !!!
+  has_system_token                     V=0.479  flag=1→TP:0.00 FP:1.00  (n=30) !!!
+  fname_has_date                       V=0.961  flag=1→TP:0.97 FP:0.03  (n=78) !!!
+  fname_has_rotation_num               V=0.296  flag=1→TP:0.00 FP:1.00  (n=14)
+  pattern_count_log1p                  V=0.967  flag=1→TP:0.00 FP:1.00  (n=151) !!!
+  pattern_count_bin                    V=0.576  flag=1→TP:0.00 FP:1.00  (n=145) !!!
+  pii_type_ratio                       V=0.976  flag=1→TP:0.00 FP:0.00  (n=0) !!!
+  created_hour                         V=0.399  flag=1→TP:0.33 FP:0.67  (n=149) !!!
+  created_weekday                      V=0.260  flag=1→TP:0.29 FP:0.71  (n=126)
+  is_weekend                           V=0.098  flag=1→TP:0.58 FP:0.42  (n=50)
+  created_month                        V=0.066  flag=1→TP:0.53 FP:0.47  (n=152)
+
+======================================================================
+A-4. 상호정보량 (Mutual Information) 종합 랭킹
+======================================================================
+
+  Rank  Feature                                         MI
+  ----  ----------------------------------------  --------
+     1  phone_count                                 0.5778 ← HIGH
+     2  _server_freq                                0.5465 ← HIGH
+     3  _ext_enc                                    0.4434 ← HIGH
+     4  pattern_count                               0.4107 ← HIGH
+     5  ssn_count                                   0.3925 ← HIGH
+     6  email_count                                 0.2467
+
+======================================================================
+C. 단일 피처 예측력 (DecisionTree max_depth=1)
+======================================================================
+
+  Rank  Feature                                   F1-macro  판정        
+  ----  ----------------------------------------  --------  ----------
+     1  _server_freq                                0.9349  *** DANGER
+     2  phone_count                                 0.9032  *** DANGER
+     3  _ext_enc                                    0.8063  ** WARNING
+     4  pattern_count                               0.7182  ** WARNING
+     5  email_count                                 0.7048  ** WARNING
+     6  ssn_count                                   0.6890  OK
+
+  [저장] single_feature_f1.csv
+
+======================================================================
+F. Column Risk Registry
+======================================================================
+  organization                    null=0.0%  card=     2  purity=0.50  [Safe (unused)]
+  ops_dept                        null=0.0%  card=     6  purity=0.54  [Safe (unused)]
+  service                         null=0.0%  card=     6  purity=0.56  [Safe (unused)]
+  label_review                    null=0.0%  card=     2  purity=1.00  [Post-label artifact]
+  fp_description                  null=0.0%  card=    10  purity=1.00  [Post-label artifact]
+  exception_requested             null=0.0%  card=     2  purity=0.82  [Post-label artifact]
+  retention_period                null=0.0%  card=     5  purity=0.91  [Safe (unused)]
+  server_name                     null=0.0%  card=    50  purity=1.00  [Target proxy] <<<
+  agent_ip                        null=0.0%  card=   120  purity=1.00  [Safe (unused)]
+  pattern_count                   null=0.0%  card=   121  purity=0.98  [Target proxy] <<<
+  file_path                       null=0.0%  card=    30  purity=1.00  [Target proxy] <<<
+  file_name                       null=0.0%  card=   102  purity=1.00  [Target proxy] <<<
+  ssn_count                       null=0.0%  card=   101  purity=0.98  [Target proxy] <<<
+  phone_count                     null=0.0%  card=    53  purity=0.98  [Target proxy] <<<
+  email_count                     null=0.0%  card=    52  purity=0.93  [Possible leakage] <<<
+  file_created_at                 null=0.0%  card=   152  purity=1.00  [Target proxy] <<<
+  label_raw                       null=0.0%  card=     2  purity=1.00  [TARGET]
+  label_work_month                null=0.0%  card=     2  purity=0.50  [Post-label artifact]
+  _source_file                    null=0.0%  card=     8  purity=1.00  [Post-label artifact]
+  pk_file                         null=0.0%  card=   152  purity=1.00  [PK (safe)]
+  pk_event                        null=0.0%  card=   152  purity=1.00  [PK (safe)]
+
+  [저장] column_risk_registry.csv
+  Target proxy: 7개
+  Possible leakage: 1개
+  Post-label artifact: 5개
+  Safe (unused): 5개
+
+======================================================================
+종합 판정 (Go / No-Go)
+======================================================================
+
+  [데이터 특성 요약]
+  label과 강한 연관: 2건
+  강한 단일 판별력:  2건
+
+  상세:
+    - HIGH_CORR: server_name Cramer's V=1.000 - label과 강한 연관
+    - HIGH_CORR: _source_file Cramer's V=1.000 - label과 강한 연관
+    - STRONG:    _server_freq 단일피처 F1=0.935 - 강한 판별력
+    - STRONG:    phone_count 단일피처 F1=0.903 - 강한 판별력
+    - MODERATE:  _ext_enc 단일피처 F1=0.806
+    - MODERATE:  pattern_count 단일피처 F1=0.718
+    - MODERATE:  email_count 단일피처 F1=0.705
+
+  [핵심 액션]
+  이 결과만으로는 모델의 옳고 그름을 판단할 수 없음.
+  -> Temporal Holdout (10~12월)으로 '미래 예측 성능'을 반드시 확인할 것.
+  -> Feature Ablation으로 '어떤 피처가 빠지면 취약한지'를 파악할 것.
+
+  [저장] bias_summary.md

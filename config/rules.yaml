@@ -1,0 +1,329 @@
+# Architecture v1.3 §7.3 — RULE Labeler 정의
+#
+# 구조:
+#   L1: 도메인 기반 룰 (domain_list) — 이메일 도메인 직접 매칭
+#   L2: 정규식 기반 룰 (regex)       — full_context_raw 내 패턴 매칭 (Phase 2 전용)
+#   L3: 피처 조건 기반 룰 (feature_condition) — 경로/파일명/통계 기반 (Phase 1 동작)
+#
+# ─────────────────────────────────────────────────────────────
+# [개선 이력 — docs/rule_labeler_analysis.md 참조]
+#
+# 2026-03-15 v2.0:
+#   - primary_class 전면 변경: Architecture v1.3 확정 6-class 체계 적용
+#     FP-내부도메인 → FP-이메일패턴
+#     FP-OS저작권   → FP-라이브러리
+#     FP-더미데이터 → FP-더미테스트
+#     FP-bytes크기 / FP-타임스탬프 / FP-숫자나열/코드 → FP-숫자패턴
+#     FP-패턴맥락   → FP-시스템로그
+#   - L2 룰에 requires_context: true 추가 (Phase 1 조기 종료)
+#   - L2_HADOOP_PATH_001: active: false → PATH_HADOOP_001 (L3)로 대체
+#   - PATH_TEMP_DEV_001: /dev/ 제거 후 PATH_SYSTEM_DEVICE_001로 분리
+#   - 신규 L3 룰: PATH_SYSTEM_DEVICE_001, PATH_PACKAGE_001, PATH_CRON_LOG_001,
+#                PATH_HADOOP_001
+# ─────────────────────────────────────────────────────────────
+#
+# 필드 설명:
+#   rule_id             : 유일 식별자 (rule_stats.json 키)
+#   applies_to_pii_type : 'email' | 'phone' | 'rrn' | 'any'
+#   primary_class       : 분류 대상 레이블 (Architecture v1.3 확정 7종)
+#   reason_code         : 분류 이유 코드 (evidence 기록용)
+#   pattern_type        : 'domain_list' | 'regex' | 'feature_condition'
+#   pattern             : domain_list → 도메인 문자열 목록
+#                         regex       → Python re 패턴 문자열
+#   requires_context    : true이면 full_context_raw 없을 때 매칭 시도 생략 (L2 전용)
+#   context_scope       : 'full_context' (regex 전용)
+#   conditions          : feature_condition 조건 목록 [{field, op, value}, ...]
+#   logic               : 'and' | 'or' (feature_condition 전용)
+#   priority            : 높을수록 우선 적용 (충돌 해소)
+#   evidence_template   : evidence 메시지 형식 ({matched_value} 치환)
+#   active              : false이면 룰 비활성화
+#
+# ─────────────────────────────────────────────────────────────
+# [오분류 리스크 관리 원칙]
+#
+# 모든 룰은 "FP라고 확신할 수 있는 최소 조건"만 표현한다.
+# 애매한 케이스는 룰로 잡지 않고 ML + TP fallback에 위임한다.
+# rule_stats.json N=0 룰은 Decision Combiner Case 1에 진입하지 않으므로
+# 실적이 쌓이기 전까지 최종 판정에 영향 없음.
+# ─────────────────────────────────────────────────────────────
+
+rules:
+
+  # ══════════════════════════════════════════════
+  # L1: 내부/외부 이메일 도메인 룰 (email 전용)
+  # Phase 1/2 공통 동작 — email_domain 컬럼 또는 ctx에서 @domain 탐색
+  # 리스크: 낮음 (도메인이 명시적으로 내부/OSS임이 확인된 경우만 매칭)
+  # ══════════════════════════════════════════════
+
+  - rule_id: "L1_DOMAIN_INTERNAL_001"
+    applies_to_pii_type: "email"
+    primary_class: "FP-이메일패턴"
+    reason_code: "INT_DOMAIN_LGUPLUS"
+    pattern_type: "domain_list"
+    pattern:
+      - "lguplus.co.kr"
+      - "bdp.lguplus.co.kr"
+      - "lgup.co.kr"
+      - "lgupluscns.com"
+      - "devnet.lguplus.co.kr"
+    priority: 100
+    evidence_template: "내부 도메인 매칭: {matched_value}"
+    active: true
+
+  - rule_id: "L1_DOMAIN_OS_001"
+    applies_to_pii_type: "email"
+    primary_class: "FP-라이브러리"
+    reason_code: "OS_DOMAIN_OPENSOURCE"
+    pattern_type: "domain_list"
+    pattern:
+      - "redhat.com"
+      - "fedoraproject.org"
+      - "gnu.org"
+      - "apache.org"
+      - "debian.org"
+      - "ubuntu.com"
+      - "centos.org"
+      - "kernel.org"
+      - "linux.com"
+      - "suse.com"
+    priority: 90
+    evidence_template: "OS/오픈소스 도메인 매칭: {matched_value}"
+    active: true
+
+  - rule_id: "L1_DOMAIN_DUMMY_001"
+    applies_to_pii_type: "email"
+    primary_class: "FP-더미테스트"
+    reason_code: "DUMMY_EMAIL_DOMAIN"
+    pattern_type: "domain_list"
+    pattern:
+      - "example.com"
+      - "example.org"
+      - "test.com"
+      - "localhost"
+      - "entry.sc"
+      - "cherry.email"
+      - "mailtest.com"
+    priority: 85
+    evidence_template: "더미/테스트 도메인 매칭: {matched_value}"
+    active: true
+
+  # ══════════════════════════════════════════════
+  # L2: 정규식 기반 룰 — full_context_raw 전체 검색
+  # ⚠️  Phase 2 전용: requires_context: true 설정으로 Phase 1에서 자동 skip
+  # ⚠️  rule_stats N=0 유지 → Decision Combiner Case 1 미진입 (ML에 위임)
+  # ══════════════════════════════════════════════
+
+  - rule_id: "L2_KEYWORD_BYTES_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-숫자패턴"
+    reason_code: "BYTES_KEYWORD_ADJACENT"
+    pattern_type: "regex"
+    requires_context: true
+    pattern: "\\bbytes?\\b"
+    context_scope: "full_context"
+    priority: 80
+    evidence_template: "bytes 키워드 인접: {matched_value}"
+    active: true
+
+  - rule_id: "L2_KEYWORD_TIMESTAMP_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-숫자패턴"
+    reason_code: "KEY_EXPIRYDATE"
+    pattern_type: "regex"
+    requires_context: true
+    pattern: "(?i)(expir|timestamp|duration|created_at|updated_at|date\\s*=|x-timestamp)"
+    context_scope: "full_context"
+    priority: 75
+    evidence_template: "타임스탬프 관련 키워드: {matched_value}"
+    active: true
+
+  - rule_id: "L2_VERSION_PATTERN_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-숫자패턴"
+    reason_code: "VERSION_NUMBER"
+    pattern_type: "regex"
+    requires_context: true
+    pattern: "(?i)(v\\d+\\.\\d+|ver(?:sion)?\\s*[=:]?\\s*\\d+|\\.\\d+\\.\\d+\\.\\d+)"
+    context_scope: "full_context"
+    priority: 70
+    evidence_template: "버전 패턴 발견: {matched_value}"
+    active: true
+
+  - rule_id: "L2_KERBEROS_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-이메일패턴"
+    reason_code: "KERBEROS_TOKEN"
+    pattern_type: "regex"
+    requires_context: true
+    pattern: "(?i)(kerberos|krb5?|kdc\\b|principal\\s*=|@LGUPLUS\\.CO\\.KR)"
+    context_scope: "full_context"
+    priority: 65
+    evidence_template: "Kerberos 토큰 패턴: {matched_value}"
+    active: true
+
+  - rule_id: "L2_DUMMY_KEYWORD_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-더미테스트"
+    reason_code: "DUMMY_TEST_KEYWORD"
+    pattern_type: "regex"
+    requires_context: true
+    pattern: "(?i)\\b(test|sample|dummy|example|mock|placeholder|테스트|더미|샘플)\\b"
+    context_scope: "full_context"
+    priority: 60
+    evidence_template: "더미/테스트 키워드: {matched_value}"
+    active: true
+
+  # L2_HADOOP_PATH_001: L3 PATH_HADOOP_001로 대체 (경로 기반이므로 L3가 더 적합)
+  - rule_id: "L2_HADOOP_PATH_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-시스템로그"
+    reason_code: "HADOOP_SYSTEM_PATH"
+    pattern_type: "regex"
+    requires_context: true
+    pattern: "(?i)(/hadoop/|/hdfs/|/mapreduce/|/hive/warehouse/|/yarn/)"
+    context_scope: "full_context"
+    priority: 55
+    evidence_template: "Hadoop/빅데이터 시스템 경로 (ctx): {matched_value}"
+    active: false
+
+  # ══════════════════════════════════════════════
+  # L3: 경로/파일명/통계 피처 기반 룰 (feature_condition)
+  # Phase 1/2 공통 동작 — full_context_raw 없이 동작
+  # ══════════════════════════════════════════════
+
+  # ── 라이브러리/저작권 ──────────────────────────
+
+  - rule_id: "PATH_LICENSE_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-라이브러리"
+    reason_code: "LICENSE_PATH"
+    pattern_type: "feature_condition"
+    conditions:
+      - {field: "has_license_path", op: "eq", value: 1}
+    logic: "and"
+    priority: 92
+    evidence_template: "라이선스/저작권 경로: has_license_path=1"
+    active: true
+
+  # 패키지/라이브러리 설치 경로 (pip/npm/conda/RPM 등)
+  # 리스크: 낮음 — 패키지 설치 경로에 실제 개인정보가 있을 가능성 매우 낮음
+  - rule_id: "PATH_PACKAGE_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-라이브러리"
+    reason_code: "PACKAGE_INSTALL_PATH"
+    pattern_type: "feature_condition"
+    conditions:
+      - {field: "is_package_path", op: "eq", value: 1}
+    logic: "and"
+    priority: 91
+    evidence_template: "패키지/라이브러리 설치 경로: is_package_path=1"
+    active: true
+
+  # ── 시스템로그/인프라 ──────────────────────────
+
+  # Docker overlay 경로
+  # 리스크: 낮음 — Docker 레이어 경로에 실제 개인정보가 있을 가능성 매우 낮음
+  - rule_id: "PATH_DOCKER_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-시스템로그"
+    reason_code: "DOCKER_OVERLAY_PATH"
+    pattern_type: "feature_condition"
+    conditions:
+      - {field: "is_docker_overlay", op: "eq", value: 1}
+    logic: "and"
+    priority: 90
+    evidence_template: "Docker overlay 경로: is_docker_overlay=1"
+    active: true
+
+  # 시스템 디바이스 경로 (/dev/, /proc/, /sys/)
+  # 리스크: 낮음 — OS 디바이스/프로세스 가상 파일시스템에 개인정보 없음
+  - rule_id: "PATH_SYSTEM_DEVICE_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-시스템로그"
+    reason_code: "SYSTEM_DEVICE_PATH"
+    pattern_type: "feature_condition"
+    conditions:
+      - {field: "is_system_device", op: "eq", value: 1}
+    logic: "and"
+    priority: 89
+    evidence_template: "시스템 디바이스 경로: is_system_device=1"
+    active: true
+
+  # 로그 파일 + 대량 검출 (10000건 초과)
+  # 리스크: 낮음 — 10000건 이상 대량 검출은 패턴 오인식 가능성 압도적
+  - rule_id: "PATH_LOG_MASS_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-시스템로그"
+    reason_code: "LOG_MASS_DETECTION"
+    pattern_type: "feature_condition"
+    conditions:
+      - {field: "is_log_file", op: "eq", value: 1}
+      - {field: "pattern_count", op: "gt", value: 10000}
+    logic: "and"
+    priority: 88
+    evidence_template: "로그 파일 + 대량 검출: is_log_file=1, pattern_count>10000"
+    active: true
+
+  # Hadoop/빅데이터 시스템 경로 (L2_HADOOP_PATH_001 대체)
+  # 리스크: 낮음 — 빅데이터 인프라 경로에 마스킹 대상 실제 PII 가능성 낮음
+  - rule_id: "PATH_HADOOP_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-시스템로그"
+    reason_code: "HADOOP_BIGDATA_PATH"
+    pattern_type: "feature_condition"
+    conditions:
+      - {field: "has_system_token", op: "eq", value: 1}
+      - {field: "is_log_file", op: "eq", value: 1}
+    logic: "and"
+    priority: 84
+    evidence_template: "Hadoop/빅데이터 시스템 경로: has_system_token=1, is_log_file=1"
+    active: true
+
+  # 크론/배치 로그 경로
+  # 리스크: 중간 — 배치 스크립트 자체에 개인정보가 있을 수 있음
+  #   → is_log_file AND has_cron_path 두 조건 AND로 제한 (로그만, 스크립트 제외)
+  - rule_id: "PATH_CRON_LOG_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-시스템로그"
+    reason_code: "CRON_BATCH_LOG"
+    pattern_type: "feature_condition"
+    conditions:
+      - {field: "has_cron_path", op: "eq", value: 1}
+      - {field: "is_log_file", op: "eq", value: 1}
+    logic: "and"
+    priority: 87
+    evidence_template: "크론/배치 로그 경로: has_cron_path=1, is_log_file=1"
+    active: true
+
+  # 로그 로테이션 파일 (access.log.1, app.log.001 등)
+  # 리스크: 낮음 — 로테이션 번호가 있는 로그 파일은 시스템 자동 생성
+  - rule_id: "FILE_ROTATION_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-시스템로그"
+    reason_code: "LOG_ROTATION_FILE"
+    pattern_type: "feature_condition"
+    conditions:
+      - {field: "fname_has_rotation_num", op: "eq", value: 1}
+      - {field: "is_log_file", op: "eq", value: 1}
+    logic: "and"
+    priority: 68
+    evidence_template: "로그 로테이션 파일: fname_has_rotation_num=1, is_log_file=1"
+    active: true
+
+  # ── 더미/테스트 ────────────────────────────────
+
+  # 임시/개발/테스트 경로 (/tmp/, /test/, /tests/ 등)
+  # ⚠️  /dev/ 제거됨 (Linux 디바이스 경로 오매핑 방지) → PATH_SYSTEM_DEVICE_001 분리
+  # 리스크: 중간 — /tmp/는 실제 개인정보 파일이 경유할 수 있음
+  #   → rule_stats N=0 유지, ML에 보조 신호로만 사용
+  - rule_id: "PATH_TEMP_DEV_001"
+    applies_to_pii_type: "any"
+    primary_class: "FP-더미테스트"
+    reason_code: "TEMP_DEV_PATH"
+    pattern_type: "feature_condition"
+    conditions:
+      - {field: "is_temp_or_dev", op: "eq", value: 1}
+    logic: "and"
+    priority: 72
+    evidence_template: "임시/개발/테스트 경로: is_temp_or_dev=1"
+    active: true

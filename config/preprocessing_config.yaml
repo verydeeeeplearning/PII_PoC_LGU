@@ -1,0 +1,60 @@
+version: "1.0"
+
+data_sources:
+  sumologic_server_i:
+    description: "Server-i Sumologic 검출 원본"
+    file_pattern: "data/raw/dataset_a/*.xlsx"
+    column_map:
+      dfile_computername: server_name
+      dfile_agentip: agent_ip
+      dfile_filedirectedpath: file_path
+      dfile_filename: file_name
+      dfile_filecreatedtime: file_created_at
+      dfile_inspectcontentwithcontext: full_context_raw
+      dfile_patternname: pii_type_inferred
+      dfile_patterncnt: pattern_count
+      dfile_ssnpatterncnt: ssn_count
+      dfile_phonepatterncnt: phone_count
+      dfile_emailpatterncnt: email_count
+      dfile_filesize: file_size
+      dfile_fileextension: file_extension
+      dfile_deptname: dept_name
+      dfile_inspectmaskedcontent: masked_content
+    pk_file_fields: [server_name, agent_ip, file_path, file_name]
+    on_unrecognized_column: "warn"
+
+join:
+  label_cols:
+    - pk_file
+    - pk_event
+    - label_raw
+    - organization
+    - label_work_month
+    - ops_dept
+    - service
+  on_zero_join: "warn_and_diagnose"
+
+parsing:
+  s1_parser:
+    window_size: 60
+    masking_pattern: '(.{0,15})(\S*\*{3,}\S*)(.{0,15})'
+    pattern_truncation: 50
+    context_truncation: 200
+  label_loader:
+    datetime_formats:
+      - "%Y-%m-%d %H:%M:%S"
+      - "%Y/%m/%d %H:%M:%S"
+      - "%Y%m%d%H%M%S"
+      - "%Y-%m-%dT%H:%M:%S"
+      - "%Y-%m-%d"
+      - "%Y/%m/%d"
+      - "%d/%m/%Y %H:%M:%S"
+      - "%m/%d/%Y %H:%M:%S"
+      - "%Y.%m.%d %H:%M:%S"
+    on_no_valid_sheet: "warn_and_first_fallback"
+    on_datetime_parse_fail: "warn"
+  loader:
+    csv_encoding_candidates:
+      - "utf-8"
+      - "utf-8-sig"
+      - "cp949"

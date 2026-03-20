@@ -1,0 +1,115 @@
+# Schema Registry — Architecture.md v1.2 §5
+#
+# 스키마 불일치 시 → silver_quarantine.parquet 격리 (crash 아님)
+# on_mismatch: "quarantine" | "crash" | "warn"
+
+version: "1.2"
+
+schemas:
+  dataset_a:
+    description: "Server-i 검출 이벤트 원본 (Dataset A)"
+    required_columns:
+      - name: "server_name"
+        dtype: "string"
+      - name: "agent_ip"
+        dtype: "string"
+      - name: "file_path"
+        dtype: "string"
+      - name: "full_context_raw"        # 기존: detected_text_with_context
+        dtype: "string"
+        aliases:
+          - "detected_text_with_context"  # 실제 데이터 컬럼명 fallback
+          - "dfile_inspectcontentwithcontext"
+      - name: "event_time"
+        dtype: "datetime"
+        aliases:
+          - "dfile_createdate"
+      - name: "패턴 종류"
+        dtype: "string"
+        aliases:
+          - "pattern_type"
+          - "dfile_patternname"
+    pk_columns:
+      - "server_name"
+      - "agent_ip"
+      - "file_path"
+    fallback_pk:
+      - "detection_id"
+    on_mismatch: "quarantine"           # 불일치 행 → silver_quarantine.parquet
+
+  dataset_b:
+    description: "소만사 오탐 레이블링 데이터 (Dataset B)"
+    required_columns:
+      - name: "file_path"
+        dtype: "string"
+        aliases:
+          - "파일 명"
+      - name: "label"
+        dtype: "string"
+        aliases:
+          - "판단근거"
+      - name: "패턴 종류"
+        dtype: "string"
+      - name: "full_context_raw"        # 기존: detected_text_with_context
+        dtype: "string"
+        aliases:
+          - "검출 내역"
+          - "detected_text_with_context"
+    pk_columns:
+      - "server_name"
+      - "agent_ip"
+      - "file_path"
+    fallback_pk:
+      - "detection_id"
+    on_mismatch: "quarantine"
+
+  # ─────────────────────────────────────────────────────────────
+  # [TODO — Phase 0-A 구현 시 반영할 스키마]
+  #
+  # dataset_label: 스키마를 아래에 추가할 것.
+  # (레이블 Excel 72+개 파일 — 3개 조직 × 12개월 × 정탐/오탐)
+  #
+  # 핵심 특성:
+  #   - 컬럼명이 한글임 → column_normalizer.py로 영문 변환 후 이 스키마로 검증
+  #   - pk_event는 5-field (server_name, agent_ip, file_path, file_name, file_created_at)
+  #   - fp_description은 오탐 파일에만 존재 (optional)
+  #   - file_size(R열)은 100% 결측 → required_columns에서 제외
+  #
+  # dataset_label:
+  #   description: "레이블 Excel — 전 조직×전 월 합산 (영문 컬럼 변환 후)"
+  #   required_columns:
+  #     - name: "server_name"
+  #       dtype: "string"
+  #     - name: "agent_ip"
+  #       dtype: "string"
+  #     - name: "file_path"
+  #       dtype: "string"
+  #     - name: "file_name"
+  #       dtype: "string"
+  #     - name: "pattern_count"
+  #       dtype: "numeric"
+  #     - name: "ssn_count"
+  #       dtype: "numeric"
+  #     - name: "phone_count"
+  #       dtype: "numeric"
+  #     - name: "email_count"
+  #       dtype: "numeric"
+  #     - name: "file_created_at"
+  #       dtype: "datetime"
+  #     - name: "label_raw"             # 파일 출처 기반 부여 (TP/FP)
+  #       dtype: "string"
+  #     - name: "organization"          # 조직명 (디렉토리명 파싱)
+  #       dtype: "string"
+  #     - name: "label_work_month"      # 작업 월 (디렉토리명 파싱)
+  #       dtype: "string"
+  #   optional_columns:
+  #     - name: "fp_description"        # 오탐 파일에만 존재
+  #       dtype: "string"
+  #   pk_columns:
+  #     - "server_name"
+  #     - "agent_ip"
+  #     - "file_path"
+  #     - "file_name"
+  #     - "file_created_at"             # 5-field pk_event
+  #   on_mismatch: "quarantine"
+  # ─────────────────────────────────────────────────────────────
