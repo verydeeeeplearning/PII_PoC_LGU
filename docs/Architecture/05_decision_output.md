@@ -8,9 +8,12 @@ RULE 라벨러(S3a)와 ML 라벨러(S3b)의 결과를 결합하여, **최종 라
 
 ```python
 # 임계값 (하이퍼파라미터, config로 관리)
-# Wave 4 C5: threshold_policy.json에서 자동 로드 가능 (models/final/threshold_policy.json)
+# Wave 4 C5: threshold_policy.json에서 자동 로드 (models/final/threshold_policy.json)
 # 아래는 fallback 기본값. run_training.py Step 6c에서 Coverage-Precision Curve 기반으로
-# 최적 tau를 계산하여 threshold_policy.json에 저장. 향후 이 파일에서 자동 로드 예정.
+# 최적 tau를 계산하여 threshold_policy.json에 저장.
+# Wave 5 C2: slice_thresholds (server_env별 tau) 추가 저장
+# Wave 5 C1: easy_fp_suppressor 조건도 threshold_policy.json에 포함
+# run_report.py는 threshold_policy.json을 우선 로드하여 재계산 없이 사용
 TAU_RULE_CONF = 0.85       # 룰 신뢰도 임계값
 TAU_ML_CONF = 0.70         # ML 확신 임계값
 TAU_ML_MARGIN = 0.20       # ML 마진 임계값

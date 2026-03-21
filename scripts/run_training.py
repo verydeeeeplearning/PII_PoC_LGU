@@ -39,7 +39,8 @@ from src.utils.common import set_seed, ensure_dirs
 from src.utils.constants import (
     RANDOM_SEED, PROCESSED_DATA_DIR, MERGED_CLEANED_FILE,
     TEXT_COLUMN, LABEL_COLUMN, TEST_SIZE, TFIDF_MAX_FEATURES,
-    FEATURE_DIR, MODEL_DIR, REPORT_DIR, FILE_PATH_COLUMN,
+    FEATURE_DIR, MODEL_DIR, FINAL_MODEL_DIR, CHECKPOINT_DIR,
+    REPORT_DIR, FILE_PATH_COLUMN,
 )
 from src.features.pipeline import build_features, save_feature_artifacts
 from src.models.trainer import (
@@ -279,12 +280,12 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
     silver_label_path = source_path or (PROCESSED_DATA_DIR / "silver_label.parquet")
     rules_yaml_path   = PROJECT_ROOT / "config" / "rules.yaml"
     rule_stats_path   = PROJECT_ROOT / "config" / "rule_stats.json"
-    model_output_path = MODEL_DIR / "phase1_label_lgb.joblib"
+    model_output_path = FINAL_MODEL_DIR / "phase1_label_lgb.joblib"
 
     # ── 체크포인트 설정 ──
     # 소스 파일명으로 구분 (silver_label vs silver_joined 혼용 방지)
     _sfx      = silver_label_path.stem
-    _ckpt_dir = MODEL_DIR / "checkpoints"
+    _ckpt_dir = CHECKPOINT_DIR
     _ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     _ckpt1  = _ckpt_dir / f"step1_df_{_sfx}.pkl"          # Step 1: raw df
@@ -465,13 +466,13 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
             "is_package_path", "has_cron_path", "has_date_in_path",
             "has_business_token", "has_system_token",
             "rule_matched", "rule_primary_class", "rule_id",
-            "exception_requested",  # 예외 신청 이력 (FP 강신호)
-            # [Tier 2 B7] 서버 의미 토큰 (server_freq 대체)
+            # exception_requested — Sumologic에 없음, 추론 불가 → 제거
+            # [Tier 2 B1] 범주형 피처 (Sumologic에서 사용 가능 확인됨)
+            "service", "ops_dept", "organization", "retention_period",
+            # [Tier 2 B7] 서버 의미 토큰 (server_freq 대체) — Sumologic server_name에서 파생 가능
             "server_env", "server_is_prod", "server_stack",
             # [Tier 2 B8] RULE 세부 신호 (rule_matched binary → 도메인 지식)
             "rule_confidence_lb",
-            # [Tier 2 B1] 범주형 피처 (Label Encoding은 pipeline.py에서 수행)
-            "service", "ops_dept", "organization", "retention_period",
             # [Tier 2 B9] file-level aggregation (파이프라인에서 계산)
             "file_event_count", "file_pii_diversity",
         ]
@@ -550,10 +551,87 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         print("\n[--dry-run] 피처 생성까지 완료. 모델 학습/저장 건너뜀.")
         return
 
-    # ── [Tier 2 B2] 중복 샘플 가중치 계산 ──
+    # ── [Tier 3 C1] Easy FP Suppressor — 고확신 FP 선제 분리 ──
+    # 고순도 FP 조건에 해당하는 행을 ML 학습/평가 전에 분리한다.
+    # Suppressor가 처리한 행은 ML이 보지 않으므로, ML이 hard case에 집중한다.
     import numpy as _np
+
+    _df_tr = result.get("df_train", pd.DataFrame())
+    _df_te = result.get("df_test", pd.DataFrame())
+
+    def _easy_fp_mask(df_slice):
+        """Sumologic에서 사용 가능한 컬럼만으로 고확신 FP 조건 판별."""
+        mask = pd.Series(False, index=df_slice.index)
+        # 조건 1: 시스템 장치 경로 (is_system_device=1)
+        if "is_system_device" in df_slice.columns:
+            mask = mask | (df_slice["is_system_device"] == 1)
+        # 조건 2: 패키지 경로 + 대량 검출 (is_package_path=1 AND is_mass_detection=1)
+        if "is_package_path" in df_slice.columns and "is_mass_detection" in df_slice.columns:
+            mask = mask | ((df_slice["is_package_path"] == 1) & (df_slice["is_mass_detection"] == 1))
+        # 조건 3: Docker overlay (is_docker_overlay=1)
+        if "is_docker_overlay" in df_slice.columns:
+            mask = mask | (df_slice["is_docker_overlay"] == 1)
+        # 조건 4: 라이선스 경로 (has_license_path=1)
+        if "has_license_path" in df_slice.columns:
+            mask = mask | (df_slice["has_license_path"] == 1)
+        return mask
+
+    _easy_fp_train_mask = _easy_fp_mask(_df_tr)
+    _easy_fp_test_mask = _easy_fp_mask(_df_te)
+
+    # Suppressor 순도(purity) 검증 — train에서 실제 FP 비율 확인
+    _y_train_str = le.inverse_transform(y_train_enc)
+    _easy_fp_train_labels = _y_train_str[_easy_fp_train_mask.values]
+    _easy_fp_count = _easy_fp_train_mask.sum()
+
+    if _easy_fp_count > 0:
+        _easy_fp_purity = (_easy_fp_train_labels == "FP").mean()
+        _easy_tp_leak = (_easy_fp_train_labels == "TP").sum()
+        print(f"\n[Tier 3 C1] Easy FP Suppressor")
+        print(f"  Train easy FP: {_easy_fp_count:,}건 / {len(_df_tr):,}건 "
+              f"({_easy_fp_count/len(_df_tr):.1%})")
+        print(f"  Purity (실제 FP 비율): {_easy_fp_purity:.4f}")
+        print(f"  TP 유출: {_easy_tp_leak:,}건")
+
+        # purity 95% 이상일 때만 suppressor 활성화
+        if _easy_fp_purity >= 0.95:
+            print(f"  → Purity ≥ 0.95: Suppressor 활성화")
+            # train/test에서 easy FP 제거 → residual만 ML에 전달
+            _residual_train_mask = ~_easy_fp_train_mask.values
+            _residual_test_mask = ~_easy_fp_test_mask.values
+
+            # suppressed test의 ground truth를 먼저 저장 (슬라이싱 전)
+            _suppressed_test_y = le.inverse_transform(
+                y_test_enc[_easy_fp_test_mask.values]
+            ) if _easy_fp_test_mask.sum() > 0 else _np.array([])
+            _suppressed_test_count = int(_easy_fp_test_mask.sum())
+
+            # 이제 residual만 남김
+            X_train = X_train[_residual_train_mask]
+            X_test = X_test[_residual_test_mask]
+            y_train_enc = y_train_enc[_residual_train_mask]
+            y_test_enc = y_test_enc[_residual_test_mask]
+            _sample_weight_offset = True
+
+            # df_train/df_test도 갱신
+            _df_tr = _df_tr[_residual_train_mask].reset_index(drop=True)
+            _df_te = _df_te[_residual_test_mask].reset_index(drop=True)
+
+            print(f"  Residual train: {X_train.shape[0]:,}건  test: {X_test.shape[0]:,}건")
+            print(f"  Suppressed test: {_suppressed_test_count:,}건")
+        else:
+            print(f"  → Purity < 0.95 ({_easy_fp_purity:.4f}): Suppressor 비활성화 (TP 유출 위험)")
+            _suppressed_test_y = _np.array([])
+            _suppressed_test_count = 0
+            _sample_weight_offset = False
+    else:
+        print(f"\n[Tier 3 C1] Easy FP Suppressor: 해당 조건 0건 → 비활성화")
+        _suppressed_test_y = _np.array([])
+        _suppressed_test_count = 0
+        _sample_weight_offset = False
+
+    # ── [Tier 2 B2] 중복 샘플 가중치 계산 ──
     _sample_weight = None
-    _df_tr = result.get("df_train")
     if _df_tr is not None and "file_path" in _df_tr.columns and "file_name" in _df_tr.columns:
         print(f"\n[Tier 2 B2] 중복 샘플 가중치 계산")
         _group_key = _df_tr["file_path"].fillna("") + "|" + _df_tr["file_name"].fillna("")
@@ -598,6 +676,22 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         else:
             print(f"  [체크포인트 이미 존재 - 저장 생략] {_ckpt6.name}")
 
+    # ── [Tier 3 C1] 합산 평가: Suppressed FP + ML Residual ──
+    if _suppressed_test_count > 0:
+        from sklearn.metrics import f1_score as _f1_fn, classification_report as _cr_fn
+        _ml_pred_test = le.inverse_transform(model.predict(X_test))
+        # suppressed는 전부 FP로 예측 (suppressor 판정)
+        _suppressed_pred = _np.full(_suppressed_test_count, "FP")
+        # 합산
+        _combined_y_true = _np.concatenate([le.inverse_transform(y_test_enc), _suppressed_test_y])
+        _combined_y_pred = _np.concatenate([_ml_pred_test, _suppressed_pred])
+        _combined_f1 = _f1_fn(_combined_y_true, _combined_y_pred, average="macro", zero_division=0)
+        print(f"\n[Tier 3 C1] 합산 평가 (Suppressed + ML Residual)")
+        print(f"  ML Residual F1: {f1:.4f} ({X_test.shape[0]:,}건)")
+        print(f"  Suppressed: {_suppressed_test_count:,}건 (전부 FP 판정)")
+        print(f"  합산 F1-macro: {_combined_f1:.4f} ({len(_combined_y_true):,}건)")
+        print(_cr_fn(_combined_y_true, _combined_y_pred, zero_division=0))
+
     # ── Step 6c: Coverage-Precision Curve (threshold 최적화) ──
     print(f"\n[Step 6c] Coverage-Precision Curve (τ 스윕)")
     try:
@@ -634,6 +728,40 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
                       f"{_row['precision']:>10.3f}  {_row['auto_fp_count']:>10,}")
         # [Tier 3 C5] threshold_policy.json 아티팩트 저장
         import json as _json_c5
+        # [Tier 3 C2] Slice-aware threshold — server_env별 tau 계산
+        _slice_thresholds = {}
+        if _df_te is not None and "server_env" in _df_te.columns and len(_fp_proba) == len(_df_te):
+            _y_test_str_c2 = le.inverse_transform(y_test_enc)
+            for _env in _df_te["server_env"].unique():
+                _env_mask = (_df_te["server_env"] == _env).values
+                if _env_mask.sum() < 100:
+                    continue
+                try:
+                    _env_cpc = compute_coverage_precision_curve(
+                        _y_test_str_c2[_env_mask], _fp_proba[_env_mask],
+                        tau_range=(0.50, 1.00, 0.05),
+                        tp_label=_tp_label_str,
+                        precision_target=0.95,
+                    )
+                    _env_tau = _env_cpc.get("recommended_tau")
+                    _env_cov = 0.0
+                    if _env_tau is not None and _env_cpc.get("curve") is not None:
+                        _match = _env_cpc["curve"][_env_cpc["curve"]["tau"] == _env_tau]
+                        if len(_match) > 0:
+                            _env_cov = float(_match.iloc[0]["coverage"])
+                    _slice_thresholds[str(_env)] = {
+                        "tau": float(_env_tau) if _env_tau is not None else None,
+                        "support": int(_env_mask.sum()),
+                        "coverage": _env_cov,
+                    }
+                except Exception:
+                    pass
+            if _slice_thresholds:
+                print(f"\n  [Tier 3 C2] Slice-aware threshold (server_env별):")
+                for _env, _info in sorted(_slice_thresholds.items()):
+                    print(f"    {_env:>10}: tau={_info['tau']}, support={_info['support']:,}, "
+                          f"coverage={_info['coverage']:.3f}")
+
         _threshold_policy = {
             "recommended_fp_tau": float(_rec_tau) if _rec_tau is not None else None,
             "precision_target": 0.95,
@@ -642,11 +770,22 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
                  "precision": float(r["precision"]), "auto_fp_count": int(r["auto_fp_count"])}
                 for _, r in _curve_df.iterrows()
             ],
+            "slice_thresholds": _slice_thresholds,  # [Tier 3 C2]
+            "easy_fp_suppressor": {  # [Tier 3 C1]
+                "enabled": _suppressed_test_count > 0,
+                "suppressed_test_count": int(_suppressed_test_count),
+                "conditions": [
+                    "is_system_device == 1",
+                    "is_package_path == 1 AND is_mass_detection == 1",
+                    "is_docker_overlay == 1",
+                    "has_license_path == 1",
+                ],
+            },
             "split_strategy": result.get("split_meta", {}).get("split_strategy", "unknown"),
             "f1_macro": float(f1),
             "saved_at": datetime.now().isoformat(),
         }
-        _tp_path = MODEL_DIR / "final" / "threshold_policy.json"
+        _tp_path = FINAL_MODEL_DIR / "threshold_policy.json"
         _tp_path.parent.mkdir(parents=True, exist_ok=True)
         with open(_tp_path, "w", encoding="utf-8") as _fp:
             _json_c5.dump(_threshold_policy, _fp, ensure_ascii=False, indent=2)
@@ -656,7 +795,7 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
 
     # ── Step 7: 모델 저장 ──
     print(f"\n[Step 7] 모델 저장")
-    (MODEL_DIR).mkdir(parents=True, exist_ok=True)
+    FINAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
     joblib.dump({"model": model, "label_encoder": le, "f1_macro": f1}, model_output_path)
     print(f"  저장 완료: {model_output_path}")
 
@@ -678,14 +817,14 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
 
     # ── Step 9: 표준 아티팩트 저장 (models/final/) ──
     # run_inference.py가 기대하는 표준 경로에 모든 아티팩트를 저장한다.
-    print(f"\n[Step 9] 표준 아티팩트 저장 -> {MODEL_DIR / 'final'}")
+    print(f"\n[Step 9] 표준 아티팩트 저장 -> {FINAL_MODEL_DIR}")
     try:
         import json as _json
         import traceback as _tb
         from src.models.feature_builder_snapshot import FeatureBuilderSnapshot
         from src.models.ood_detector import OODDetector
 
-        _final_dir = MODEL_DIR / "final"
+        _final_dir = FINAL_MODEL_DIR
         _final_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. best_model_v1.joblib (run_inference.py 기본 경로)
@@ -779,9 +918,9 @@ def _run_detection_mode(args) -> None:
 
     rules_yaml_path  = PROJECT_ROOT / "config" / "rules.yaml"
     rule_stats_path  = PROJECT_ROOT / "config" / "rule_stats.json"
-    model_output_path = MODEL_DIR / "detection_lgb.joblib"
+    model_output_path = FINAL_MODEL_DIR / "detection_lgb.joblib"
 
-    _ckpt_dir = MODEL_DIR / "checkpoints"
+    _ckpt_dir = CHECKPOINT_DIR
     _ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     _ckpt1 = _ckpt_dir / "step1_df_silver_joined_det.pkl"
@@ -919,7 +1058,7 @@ def _run_detection_mode(args) -> None:
             "is_package_path", "has_cron_path", "has_date_in_path",
             "has_business_token", "has_system_token",
             "rule_matched", "rule_primary_class", "rule_id",
-            "exception_requested",
+            # exception_requested — Sumologic에 없음 → 제거
         ]
         _keep = [c for c in _KEEP_COLS_DET if c in df.columns]
         df_for_features = df[_keep]
@@ -988,7 +1127,7 @@ def _run_detection_mode(args) -> None:
     print(f"  저장 완료: {model_output_path}")
 
     # Step 8: 표준 아티팩트 저장 (models/final/detection_*)
-    print(f"\n[Step 8] 표준 아티팩트 저장 -> {MODEL_DIR / 'final'} (detection_ 접두사)")
+    print(f"\n[Step 8] 표준 아티팩트 저장 -> {FINAL_MODEL_DIR} (detection_ 접두사)")
     try:
         import json as _json
         import traceback as _tb
@@ -996,7 +1135,7 @@ def _run_detection_mode(args) -> None:
         from src.models.ood_detector import OODDetector
         from datetime import datetime as _dt
 
-        _final_dir = MODEL_DIR / "final"
+        _final_dir = FINAL_MODEL_DIR
         _final_dir.mkdir(parents=True, exist_ok=True)
 
         save_model_with_meta(
@@ -1078,7 +1217,7 @@ def main():
     ensure_dirs(
         MODEL_DIR / "baseline",
         MODEL_DIR / "experiments",
-        MODEL_DIR / "final",
+        FINAL_MODEL_DIR,
         FEATURE_DIR,
         REPORT_DIR,
     )
@@ -1202,7 +1341,7 @@ def main():
     best_model = trained_models[best_name]
     save_model_with_meta(
         model=best_model,
-        path=str(MODEL_DIR / "final" / "best_model_v1.joblib"),
+        path=str(FINAL_MODEL_DIR / "best_model_v1.joblib"),
         label_encoder=le,
         f1_score_val=best_f1,
         model_name=best_name,

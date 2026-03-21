@@ -42,7 +42,7 @@
     - 각 스텝은 독립 실행도 가능:
         python scripts/run_data_pipeline.py --source label
         python scripts/run_training.py --source label
-        python scripts/run_evaluation.py
+        python scripts/run_report.py --source label
 """
 
 import sys
@@ -140,17 +140,6 @@ def stage_train(mode: str, use_filter: bool = False) -> None:
     _run_step(
         "[S2-S5] Feature prep -> S3a RULE -> S3b ML -> S4 Decision -> S5 Output",
         cmd,
-    )
-
-
-def stage_evaluate() -> None:
-    """S6: Monitoring & KPI (레거시 - run_report.py로 대체 권장)"""
-    python = sys.executable
-    evaluation = SCRIPTS_DIR / "run_evaluation.py"
-
-    _run_step(
-        "[S6] 평가 & KPI",
-        [python, evaluation],
     )
 
 

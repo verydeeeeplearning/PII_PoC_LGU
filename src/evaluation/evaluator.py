@@ -157,7 +157,7 @@ def _plot_confusion_matrix(
     axes[1].set_title("Confusion Matrix (Normalized by Row = Recall)", fontsize=14)
 
     plt.tight_layout()
-    fig_dir = Path(save_dir).parent / "figures"
+    fig_dir = Path(save_dir) / "figures"
     ensure_dirs(fig_dir)
     save_path = fig_dir / "confusion_matrix.png"
     plt.savefig(save_path, dpi=FIGURE_DPI, bbox_inches="tight")
@@ -354,7 +354,7 @@ def feature_importance_analysis(
     model,
     feature_names: List[str],
     top_n: int = TOP_N_FEATURES,
-    save_path: str = "outputs/feature_importance.png",
+    save_path: str = "outputs/figures/feature_importance.png",
     report_path: str = "outputs/feature_importance.csv",
 ) -> pd.DataFrame:
     """

@@ -34,20 +34,23 @@ ml_target_mask = (
 | File-level aggregation (선택) | pk_file 단위 통계 | 약 10개 | 파일 수준 맥락 증폭 |
 | **합계 (Phase 2 full)** | | **약 1,055개** | |
 
-> **Phase 1 실제 피처 구성 (Wave 4, ~454개):**
+> **Phase 1 실제 피처 구성 (Wave 5, ~530개, 실측 538에서 exception_requested 제거):**
 >
 > | 그룹 | 피처 수 | 상세 |
 > |------|--------|------|
 > | TF-IDF fname char | ~200 | file_name char_wb (2,5)-gram |
 > | TF-IDF fname shape | ~100 | file_name → `_to_shape_text()` → char_wb (2,5)-gram [Wave 4 B3] |
 > | TF-IDF path word | ~200 | file_path → `_to_path_text()` → word (1,2)-gram |
-> | Dense 메타/경로 | ~20 | fname_has_*, pattern_count_*, is_*, has_* |
+> | Dense 메타/경로 | ~20 | fname_has_*, pattern_count_*, is_*, has_*, rule_matched |
 > | Dense 서버 의미 | 3 | server_env, server_is_prod, server_stack [Wave 4 B7] |
 > | Dense RULE 세부 | 3 | rule_confidence_lb, rule_id_enc, rule_primary_class_enc [Wave 4 B8] |
 > | Dense file 집계 | 2 | file_event_count, file_pii_diversity [Wave 4 B9] |
 > | Dense 범주형 _enc | 8 | service/ops_dept/organization/retention_period/server_env/stack/rule_id/class [Wave 4 B1] |
-> | Dense 기타 | ~8 | file_extension_enc, path_depth 등 |
-> | **Phase 1 합계** | **~454** | |
+> | Dense 기타 | ~3 | file_extension_enc, path_depth 등 |
+> | ~~exception_requested~~ | ~~1~~ | ~~Wave 5에서 제거 (Sumologic에 없음)~~ |
+> | **Phase 1 합계** | **~530** | 실측 538 - exception_requested |
+>
+> **Wave 5 C1 Easy FP Suppressor:** ML 학습 전에 고확신 FP를 규칙 기반으로 선제 분리. 4개 조건 (is_system_device, is_package_path+mass, is_docker_overlay, has_license_path). purity≥95% 시 활성화, suppressed 행은 ML에서 제외.
 
 ```python
 from sklearn.feature_extraction.text import TfidfVectorizer

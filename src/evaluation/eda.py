@@ -18,7 +18,7 @@ from src.utils.plot_utils import setup_plot
 def plot_class_distribution(
     df: pd.DataFrame,
     label_column: str = "label",
-    save_path: str = "outputs/class_distribution.png",
+    save_path: str = "outputs/figures/class_distribution.png",
 ) -> None:
     """
     클래스 분포 시각화 (막대 그래프 + 비율 그래프)
@@ -62,7 +62,7 @@ def analyze_text_column(
     df: pd.DataFrame,
     text_column: str,
     label_column: str = "label",
-    save_dir: str = "outputs",
+    save_dir: str = "outputs/figures",
 ) -> pd.DataFrame:
     """
     텍스트 컬럼 분석 (길이 통계 + Box Plot)
@@ -120,7 +120,7 @@ def analyze_text_ratios(
     df: pd.DataFrame,
     text_column: str,
     label_column: str = "label",
-    save_dir: str = "outputs",
+    save_dir: str = "outputs/figures",
 ) -> pd.DataFrame:
     """
     텍스트 숫자/특수문자/대문자 비율 분석
@@ -184,7 +184,7 @@ def analyze_keyword_frequency(
     text_column: str,
     label_column: str = "label",
     keyword_groups: Optional[dict] = None,
-    save_dir: str = "outputs",
+    save_dir: str = "outputs/figures",
 ) -> None:
     """
     키워드 출현 빈도 분석 + 클래스별 히트맵

@@ -29,7 +29,7 @@ SILVER_JOINED = PROJECT_ROOT / "data" / "processed" / "silver_joined.parquet"
 LABEL_RAW_DIR = PROJECT_ROOT / "data" / "raw" / "label"
 DATASET_A_DIR = PROJECT_ROOT / "data" / "raw" / "dataset_a"
 MODEL_PATHS = [
-    PROJECT_ROOT / "models" / "phase1_label_lgb.joblib",
+    PROJECT_ROOT / "models" / "final" / "phase1_label_lgb.joblib",
     PROJECT_ROOT / "models" / "final" / "best_model_v1.joblib",
 ]
 

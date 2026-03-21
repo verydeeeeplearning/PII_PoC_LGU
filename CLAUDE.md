@@ -102,7 +102,7 @@ TP 클래스(1개, 정탐 파일 출처 자동 부여):
 | **통합 리포트** | **`scripts/run_report.py`** — eval + PoC + 진단 통합, 9-sheet Excel 생성. `--source label\|detection`, `--include-diagnosis` |
 | **데이터 진단** | **`scripts/diagnose_data_bias.py`** — Column 편향 (Cramer's V, MI), Split Robustness, Feature Ablation, Column Risk Registry |
 | **데이터 플로우 분석** | **`docs/data_flow_risk_analysis.md`** — Raw->Feature->Model 전체 추적 + 일반화 성능 관점 분석 |
-| **표준 아티팩트 저장** | **`run_training.py` Step 9** — `_run_label_mode()` 완료 후 `models/final/`에 자동 저장: `best_model_v1.joblib`, `label_encoder.joblib`, `feature_builder.joblib`, `ood_detector.joblib`, `calibrator.joblib`(조건부), `feature_schema.json` |
+| **표준 아티팩트 저장** | **`run_training.py` Step 7+9** — 모든 모델 아티팩트 `models/final/`(FINAL_MODEL_DIR)에 통합 저장: `phase1_label_lgb.joblib`, `best_model_v1.joblib`, `label_encoder.joblib`, `feature_builder.joblib`, `ood_detector.joblib`, `calibrator.joblib`(조건부), `feature_schema.json`, `threshold_policy.json` |
 | **FeatureBuilderSnapshot** | **`src/models/feature_builder_snapshot.py`** — fitted TF-IDF 벡터라이저 + dense 컬럼 통합 저장/로드. `run_inference.py`의 `feature_builder.joblib` 인터페이스 충족. `from_build_result(result)` factory로 생성 |
 
 정합성 주의:
@@ -118,6 +118,11 @@ TP 클래스(1개, 정탐 파일 출처 자동 부여):
 ---
 
 ## 4. 주요 경로
+
+**경로 상수 (`src/utils/constants.py`):**
+`PROJECT_ROOT`, `RAW_DATA_DIR`, `PROCESSED_DATA_DIR`, `FEATURE_DIR`,
+`MODEL_DIR`, `FINAL_MODEL_DIR`, `CHECKPOINT_DIR`,
+`REPORT_DIR`, `FIGURES_DIR`, `DIAGNOSIS_DIR`, `PREDICTIONS_DIR`, `EXPORTS_DIR`
 
 ```text
 config/
@@ -145,8 +150,8 @@ scripts/
   run_data_pipeline.py       # --source detection|label|joined 지원 (단독 실행용)
   run_training.py            # --source detection|label + --split group|temporal|server
   run_report.py              # ★ 통합 리포트 (eval + PoC + 진단) --source label|detection
-  run_evaluation.py          # 레거시 (run_report.py로 대체 권장)
-  run_poc_report.py          # 레거시 (run_report.py로 대체 권장)
+  run_evaluation.py          # 레거시 (run_report.py로 대체됨, run_pipeline.py에서 제거됨)
+  run_poc_report.py          # 레거시 (run_report.py에서 내부 호출, 단독 실행 비권장)
   diagnose_data_bias.py      # 데이터 편향/일반화 진단 (독립 실행용)
   run_export.py              # Parquet → CSV/Excel 내보내기
   run_phase0_validation.py   # Phase 0 Go/No-Go 판정
@@ -165,23 +170,33 @@ data/
     silver_detections.parquet # 검출 파이프라인 산출물 (pk_file 포함)
     silver_joined.parquet     # JOIN 산출물 (label_raw + full_context_raw 통합)
 
-outputs/
+outputs/                              # REPORT_DIR — 텍스트/CSV 리포트
   poc_report.xlsx                   # ★ 통합 9-sheet Excel (run_report.py --source label)
   poc_report_detection.xlsx         # ★ Joined 모델 리포트 (run_report.py --source detection)
   classification_report.txt         # sklearn 분류 리포트
   error_analysis.csv                # 오분류 패턴 분석
-  feature_importance.csv / .png     # 피처 중요도
-  confusion_matrix.png              # 혼동 행렬
+  feature_importance.csv            # 피처 중요도 (CSV)
   go_no_go_report.md                # Phase 0 Go/No-Go 판정 (run_phase0_validation.py)
   fp_description_unique_list.csv    # Phase 0 fp_description 목록
+  fp_description_mapping.csv        # fp_description → 7-class 매핑 (classify_fp_description.py)
   label_conflict_report.txt         # Phase 0 레이블 충돌 리포트
-  reliability_diagram.png           # 확률 보정 신뢰도 다이어그램 (조건부)
-  diagnosis/                        # 데이터 진단 산출물 (diagnose_data_bias.py 또는 --include-diagnosis)
+  figures/                          # FIGURES_DIR — 시각화 PNG
+    confusion_matrix.png            #   혼동 행렬
+    feature_importance.png          #   피처 중요도 바 차트
+    reliability_diagram.png         #   확률 보정 신뢰도 다이어그램 (조건부)
+    class_distribution.png          #   클래스 분포 (EDA)
+    tp_fp_distribution.png          #   TP/FP 파이차트 (EDA)
+    correlation_matrix.png          #   상관행렬 (EDA)
+  diagnosis/                        # DIAGNOSIS_DIR — 데이터 진단 산출물
     column_bias_report.txt          #   Cramer's V, MI, 단일피처 F1
     column_risk_registry.csv        #   컬럼별 리스크 등급
     split_robustness_report.csv     #   temporal/server/random split F1 비교
     ablation_report.csv             #   피처 블록 제거 F1
     bias_summary.md                 #   종합 판정
+  predictions/                      # PREDICTIONS_DIR — 추론 산출물
+    predictions_main_{run_id}.parquet
+    prediction_evidence_{run_id}.parquet
+  exports/                          # EXPORTS_DIR — Parquet→CSV/Excel 내보내기
 ```
 
 ---

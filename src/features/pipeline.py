@@ -486,9 +486,9 @@ def build_features(
             "is_log_file", "is_docker_overlay", "has_license_path",
             "is_temp_or_dev", "is_system_device", "is_package_path",
             "has_cron_path", "has_date_in_path", "has_business_token", "has_system_token",
-            # Rule Labeler 결과 + 운영 메타데이터
+            # Rule Labeler 결과
             "rule_matched",
-            "exception_requested",
+            # exception_requested — Sumologic에 없음, 추론 불가 → 제거
             # [Tier 2 B7] 서버 의미 토큰 (server_freq 대체 일반화 신호)
             "server_is_prod",
             # [Tier 2 B8] RULE 세부 신호 (rule_matched binary → 12개 룰 도메인 지식)
@@ -498,10 +498,11 @@ def build_features(
         ]
 
         # [Tier 2 B1+B7+B8] 범주형 피처 — Label Encoding으로 정수 변환
+        # exception_requested만 Sumologic에 없음 → 제거. 나머지는 사용 가능 확인됨.
         _CATEGORICAL_COLS = [
-            "service", "ops_dept", "organization", "retention_period",
-            "server_env", "server_stack",       # B7: 서버 의미 토큰
-            "rule_id", "rule_primary_class",    # B8: RULE 세부 신호
+            "service", "ops_dept", "organization", "retention_period",  # B1: Sumologic 사용 가능
+            "server_env", "server_stack",       # B7: 서버 의미 토큰 (Sumologic server_name에서 파생)
+            "rule_id", "rule_primary_class",    # B8: RULE 세부 신호 (추론 시 RuleLabeler 실행)
         ]
         _cat_cols_present = [c for c in _CATEGORICAL_COLS
                             if c in df_train.columns and c in df_test.columns]

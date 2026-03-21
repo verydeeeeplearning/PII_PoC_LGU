@@ -12,8 +12,14 @@ RAW_DATA_DIR: Path = PROJECT_ROOT / "data" / "raw"
 PROCESSED_DATA_DIR: Path = PROJECT_ROOT / "data" / "processed"
 FEATURE_DIR: Path = PROJECT_ROOT / "data" / "features"
 MODEL_DIR: Path = PROJECT_ROOT / "models"
-FIGURE_DIR: Path = PROJECT_ROOT / "outputs"
+FINAL_MODEL_DIR: Path = MODEL_DIR / "final"
+CHECKPOINT_DIR: Path = MODEL_DIR / "checkpoints"
+FIGURE_DIR: Path = PROJECT_ROOT / "outputs"          # legacy alias (= REPORT_DIR)
 REPORT_DIR: Path = PROJECT_ROOT / "outputs"
+FIGURES_DIR: Path = PROJECT_ROOT / "outputs" / "figures"
+DIAGNOSIS_DIR: Path = PROJECT_ROOT / "outputs" / "diagnosis"
+PREDICTIONS_DIR: Path = PROJECT_ROOT / "outputs" / "predictions"
+EXPORTS_DIR: Path = PROJECT_ROOT / "outputs" / "exports"
 
 # ── 컬럼명 ──
 TEXT_COLUMN: str = "detected_text_with_context"

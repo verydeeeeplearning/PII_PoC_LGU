@@ -47,7 +47,7 @@ from src.utils.constants import (
     TEXT_COLUMN,
     LABEL_COLUMN,
     FILE_PATH_COLUMN,
-    FIGURE_DIR,
+    FIGURES_DIR,
     REPORT_DIR,
     LABEL_NAMES,
 )
@@ -375,7 +375,7 @@ def parse_args():
         default=None,
         help="입력 파일 경로 (기본: silver_detections.parquet -> merged_cleaned.csv 순으로 자동 탐색)",
     )
-    parser.add_argument("--figures-dir", type=str, default=str(FIGURE_DIR))
+    parser.add_argument("--figures-dir", type=str, default=str(FIGURES_DIR))
     parser.add_argument("--report-dir",  type=str, default=str(REPORT_DIR))
     parser.add_argument("--skip-leakage", action="store_true")
     parser.add_argument("--top-n", type=int, default=20)

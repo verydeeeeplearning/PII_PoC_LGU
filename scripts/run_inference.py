@@ -23,17 +23,19 @@ from datetime import datetime
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.utils.constants import FINAL_MODEL_DIR, PREDICTIONS_DIR, PROCESSED_DATA_DIR
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="PII FPR 월별 추론 실행")
     parser.add_argument(
         "--silver-path",
-        default=str(PROJECT_ROOT / "data" / "processed" / "silver_detections.parquet"),
+        default=str(PROCESSED_DATA_DIR / "silver_detections.parquet"),
         help="Silver Parquet 경로",
     )
     parser.add_argument(
         "--model-path",
-        default=str(PROJECT_ROOT / "models" / "final" / "best_model_v1.joblib"),
+        default=str(FINAL_MODEL_DIR / "best_model_v1.joblib"),
         help="학습된 모델 경로",
     )
     parser.add_argument(
@@ -48,7 +50,7 @@ def parse_args():
     )
     parser.add_argument(
         "--output-dir",
-        default=str(PROJECT_ROOT / "outputs" / "predictions"),
+        default=str(PREDICTIONS_DIR),
         help="출력 디렉토리",
     )
     parser.add_argument(

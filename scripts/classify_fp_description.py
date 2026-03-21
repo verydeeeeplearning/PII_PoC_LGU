@@ -8,6 +8,9 @@ import pandas as pd
 import re
 import sys
 import io
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
@@ -500,6 +503,8 @@ out = (
     .sort_values("label_multiclass")
     .reset_index(drop=True)
 )
-out.to_csv("fp_description_mapping.csv", index=False, encoding="utf-8-sig")
+_out_path = PROJECT_ROOT / "outputs" / "fp_description_mapping.csv"
+_out_path.parent.mkdir(parents=True, exist_ok=True)
+out.to_csv(_out_path, index=False, encoding="utf-8-sig")
 print()
-print(">> fp_description_mapping.csv 저장 완료")
+print(f">> {_out_path} 저장 완료")

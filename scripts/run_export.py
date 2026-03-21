@@ -177,7 +177,7 @@ def parse_args():
     parser.add_argument(
         "--output-dir", type=str,
         default=str(PROJECT_ROOT / "outputs" / "exports"),
-        help="출력 디렉토리 (기본: outputs/exports)",
+        help="출력 디렉토리 (기본: outputs/exports/)",
     )
     parser.add_argument(
         "--max-rows", type=int, default=0,

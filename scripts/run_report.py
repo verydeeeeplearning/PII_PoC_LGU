@@ -104,6 +104,11 @@ def parse_args(args=None):
         dest="label_dir",
         help="레이블 Excel 디렉토리 (기본: data/raw/label)",
     )
+    parser.add_argument(
+        "--test-months", type=int, default=3,
+        dest="test_months",
+        help="temporal split 테스트 월 수 (기본: 3, run_training.py와 동일하게 설정)",
+    )
     return parser.parse_args(args)
 
 
@@ -122,7 +127,7 @@ def _generate_eval_artifacts(
     from src.utils.constants import TOP_N_FEATURES, TEXT_COLUMN
     from src.utils.common import ensure_dirs
 
-    figures_dir = output_dir.parent / "figures"
+    figures_dir = output_dir / "figures"
     ensure_dirs(output_dir, figures_dir)
 
     # Classification Report + Confusion Matrix
@@ -287,13 +292,24 @@ def main(args=None):
 
     ensure_dirs(REPORT_DIR)
 
-    # ── Step 1: 데이터 로드 ──
+    # ── Step 1: 학습 체크포인트에서 모델/피처/split 로드 ──
+    # run_training.py가 저장한 체크포인트를 그대로 사용하여
+    # 학습과 100% 동일한 피처/split/모델로 평가한다.
+    import joblib as _jl
+
+    _sfx = Path(source_cfg["silver_parquet"]).stem  # silver_label or silver_joined
+    _ckpt_dir = Path(args.model_dir) / "checkpoints"
+    _ckpt5 = _ckpt_dir / f"step5_features_{_sfx}.pkl"
+    _ckpt6 = _ckpt_dir / f"step6_model_{_sfx}.pkl"
+
+    # silver parquet은 통계/진단용으로만 로드 (전체 모집단 통계에 필요 — 체크포인트의
+    # df_train/df_test는 split 후 일부이고, label_work_month/organization 등이 없을 수 있음)
     silver_path = PROCESSED_DATA_DIR / source_cfg["silver_parquet"]
     if silver_path.exists():
-        logger.info("[Step 1] %s 로드", silver_path.name)
+        logger.info("[Step 1a] %s 로드 (통계/진단용)", silver_path.name)
         df_label = pd.read_parquet(silver_path)
     else:
-        logger.info("[Step 1] LabelLoader 실행 (parquet 없음)")
+        logger.info("[Step 1a] LabelLoader 실행 (parquet 없음)")
         from src.data.label_loader import LabelLoader
         df_label = LabelLoader(label_root=args.label_dir).load_all()
 
@@ -301,155 +317,138 @@ def main(args=None):
         logger.error("데이터가 비어 있습니다.")
         sys.exit(1)
 
-    logger.info("  데이터: %d건", len(df_label))
-
     label_col = "label_raw" if "label_raw" in df_label.columns else df_label.columns[-1]
     y_true_all = df_label[label_col].values
     tp_label = "TP"
 
-    # ── Step 2: 모델 로드 ──
+    # 체크포인트 로드 (학습과 동일한 피처/split/모델)
     model = None
     le = None
-    X_all = None
+    X_test = None
+    X_train = None
     feature_names = []
+    df_test = pd.DataFrame()
+    df_train = pd.DataFrame()
+    y_test = np.array([])
+    y_train = np.array([])
+    y_train_enc = np.array([])
+    y_test_enc = np.array([])
+    train_idx = []
+    test_idx = []
 
-    if not args.skip_ml:
+    if not args.skip_ml and _ckpt5.exists() and _ckpt6.exists():
+        logger.info("[Step 1b] 학습 체크포인트 로드 (training과 동일)")
+        _d5 = _jl.load(_ckpt5)
+        _d6 = _jl.load(_ckpt6)
+
+        result = _d5["result"]
+        X_train = result["X_train"]
+        X_test = result["X_test"]
+        y_train_enc = _d5["y_train_enc"]
+        y_test_enc = _d5["y_test_enc"]
+        le = _d5["le"]
+        feature_names = result.get("feature_names", [])
+        df_train = result.get("df_train", pd.DataFrame())
+        df_test = result.get("df_test", pd.DataFrame())
+
+        model = _d6["model"]
+        f1_from_training = _d6.get("f1", 0.0)
+
+        # y_test/y_train을 문자열로 복원
+        y_test = le.inverse_transform(y_test_enc)
+        y_train = le.inverse_transform(y_train_enc)
+
+        # train_idx/test_idx 구성 (df_label 기준 인덱스는 아니지만 크기 기반)
+        train_idx = list(range(len(y_train)))
+        test_idx = list(range(len(y_test)))
+
+        logger.info("  모델: F1=%.4f (training 기록)", f1_from_training)
+        logger.info("  X_train: %s  X_test: %s", X_train.shape, X_test.shape)
+        logger.info("  피처 수: %d", len(feature_names))
+    elif not args.skip_ml:
+        # 체크포인트 없으면 models/final에서 모델만 로드 (fallback)
+        logger.warning("[Step 1b] 체크포인트 없음 (%s) - models/final에서 모델만 로드", _ckpt5)
         try:
             from src.models.trainer import load_model_with_meta
             model_path = Path(args.model_dir) / "final" / source_cfg["model_file"]
             if not model_path.exists():
-                # fallback: label 모델 시도
                 model_path = Path(args.model_dir) / "final" / "best_model_v1.joblib"
-            if not model_path.exists():
-                raise FileNotFoundError(f"모델 없음: {model_path}")
-            logger.info("[Step 2] 모델: %s", model_path.name)
-            artifact = load_model_with_meta(str(model_path))
-            model = artifact.get("model")
-            le = artifact.get("label_encoder")
+            if model_path.exists():
+                artifact = load_model_with_meta(str(model_path))
+                model = artifact.get("model")
+                le = artifact.get("label_encoder")
+                logger.warning("  모델 로드됨. 단, 피처 불일치 가능 — 체크포인트 재생성 권장")
+                logger.warning("  python scripts/run_training.py --source %s --split temporal --test-months 3", args.source)
         except Exception as exc:
-            logger.warning("[Step 2] 모델 로드 실패 (%s) - Rule 분석만 실행", exc)
-
-    # ── Step 3: 피처 변환 ──
-    if model is not None:
-        try:
-            import scipy.sparse as _sp
-            from src.features.meta_features import build_meta_features
-            from src.features.path_features import extract_path_features as _epf
-            from src.features.tabular_features import create_file_path_features
-            from src.models.feature_builder_snapshot import FeatureBuilderSnapshot
-
-            snapshot_path = Path(args.model_dir) / "final" / source_cfg["feature_builder_file"]
-            if not snapshot_path.exists():
-                snapshot_path = Path(args.model_dir) / "final" / "feature_builder.joblib"
-
-            _df_feat = build_meta_features(df_label.copy())
-
-            if "file_path" in _df_feat.columns:
-                _path_feats = _df_feat["file_path"].apply(_epf)
-                _path_df = pd.DataFrame(list(_path_feats), index=_df_feat.index)
-                for _col in _path_df.columns:
-                    if _col not in _df_feat.columns:
-                        _df_feat[_col] = _path_df[_col]
-
-            _path_tab = create_file_path_features(_df_feat, path_column="file_path")
-            for _c in _path_tab.select_dtypes(include=[np.number]).columns:
-                _df_feat[_c] = _path_tab[_c].values
-
-            # server_freq: train-only 통계 사용이 이상적이나,
-            # 현재는 전체 데이터 기준 (B2 버그 - 후속 수정 대상)
-            if "server_name" in _df_feat.columns:
-                _sn_freq = _df_feat["server_name"].value_counts(normalize=True)
-                _df_feat["server_freq"] = _df_feat["server_name"].map(_sn_freq).fillna(0)
-
-            if snapshot_path.exists():
-                builder = FeatureBuilderSnapshot.load(str(snapshot_path))
-                X_all = builder.transform(_df_feat)
-                feature_names = builder.feature_names
-                logger.info("[Step 3] FeatureBuilderSnapshot 변환: %s", X_all.shape)
-            else:
-                logger.warning("[Step 3] snapshot 없음 - 피처 재건")
-                from src.features.pipeline import build_features
-                _result = build_features(
-                    _df_feat,
-                    label_column=label_col,
-                    use_multiview_tfidf=False,
-                    use_phase1_tfidf=True,
-                    use_synthetic_expansion=False,
-                    use_group_split=False,
-                )
-                X_all = _sp.vstack([_result["X_train"], _result["X_test"]])
-                feature_names = _result["feature_names"]
-        except Exception as exc:
-            logger.warning("[Step 3] 피처 변환 실패 (%s)", exc)
-            X_all = None
-
-    # ── Step 4: Split ──
-    logger.info("[Step 4] Primary Split")
-    if "label_work_month" in df_label.columns:
-        from src.evaluation.split_strategies import work_month_time_split
-        _n_months = df_label["label_work_month"].nunique()
-        _test_months = min(2, max(1, _n_months - 1))
-        train_idx, test_idx = work_month_time_split(df_label, test_months=_test_months)
-    elif "detection_time" in df_label.columns:
-        train_idx, test_idx = group_time_split(df_label, time_col="detection_time")
+            logger.warning("  모델 로드 실패: %s", exc)
     else:
-        n = len(df_label)
-        train_idx = list(range(int(n * 0.8)))
-        test_idx = list(range(int(n * 0.8), n))
+        logger.info("[Step 1b] --skip-ml: ML 건너뜀")
 
-    df_test = df_label.iloc[test_idx].reset_index(drop=True)
-    y_test = y_true_all[test_idx]
-    logger.info("  train=%d, test=%d", len(train_idx), len(test_idx))
+    logger.info("  전체 데이터: %d건", len(df_label))
 
-    # ── Step 5: Rule Labeler ──
-    logger.info("[Step 5] RuleLabeler")
-    rule_labels_df = pd.DataFrame()
-    try:
-        from src.filters.rule_labeler import RuleLabeler
-        rules_yaml = PROJECT_ROOT / "config" / "rules.yaml"
-        rule_stats = PROJECT_ROOT / "config" / "rule_stats.json"
-        if rules_yaml.exists() and rule_stats.exists():
-            labeler = RuleLabeler.from_config_files(str(rules_yaml), str(rule_stats))
-            result = labeler.label_batch(df_test)
-            rule_labels_df = result[0] if isinstance(result, tuple) else result
-    except Exception as exc:
-        logger.warning("[Step 5] RuleLabeler 실패: %s", exc)
-
-    # ── Step 6: ML 예측 ──
-    y_pred_test = np.full_like(y_test, fill_value=tp_label)
-    y_pred_all = np.full_like(y_true_all, fill_value=tp_label)
+    # ── ML 예측 (체크포인트의 X_test 사용) ──
+    y_pred_test = np.full(len(y_test), fill_value=tp_label)
+    y_pred_all = np.full(len(y_true_all), fill_value=tp_label)
+    y_pred_enc = None  # Step 7b에서 재사용
     ml_proba_test = np.full(len(y_test), 0.5)
 
-    if model is not None and X_all is not None:
-        logger.info("[Step 6] ML 예측")
+    if model is not None and X_test is not None:
+        logger.info("[Step 2] ML 예측 (체크포인트 X_test)")
         try:
-            from src.models.trainer import predict_with_uncertainty
-            _label_names = list(le.classes_) if le is not None else None
-            ml_df_all = predict_with_uncertainty(model, X_all, label_names=_label_names)
-            if "ml_top1_class_name" in ml_df_all.columns:
-                y_pred_all = ml_df_all["ml_top1_class_name"].values
-                y_pred_test = y_pred_all[test_idx]
-                ml_proba_test = ml_df_all["ml_top1_proba"].values[test_idx]
-                if le is not None:
-                    _fp_cls_list = [c for c in le.classes_ if c != tp_label]
-                    if _fp_cls_list:
-                        try:
-                            _all_proba = model.predict_proba(X_all)
-                            _fp_idx = list(le.classes_).index(_fp_cls_list[0])
-                            ml_proba_test = _all_proba[test_idx, _fp_idx]
-                        except Exception:
-                            pass
+            y_pred_enc = model.predict(X_test)
+            y_pred_test = le.inverse_transform(y_pred_enc)
+
+            _proba = model.predict_proba(X_test)
+            _fp_cls_list = [c for c in le.classes_ if c != tp_label]
+            if _fp_cls_list:
+                _fp_idx = list(le.classes_).index(_fp_cls_list[0])
+                ml_proba_test = _proba[:, _fp_idx]
+            else:
+                ml_proba_test = 1.0 - _proba[:, list(le.classes_).index(tp_label)]
+
+            from sklearn.metrics import f1_score as _f1s, classification_report as _cr
+            _f1 = _f1s(y_test_enc, y_pred_enc, average="macro")
+            logger.info("  F1-macro: %.4f", _f1)
+            logger.info("\n%s", _cr(y_test_enc, y_pred_enc, target_names=le.classes_))
         except Exception as exc:
-            logger.warning("[Step 6] ML 예측 실패: %s", exc)
+            logger.warning("  ML 예측 실패: %s", exc)
+
+    # ── Rule 컬럼 확인 (training Step 4에서 이미 적용됨 → 재실행 불필요) ──
+    logger.info("[Step 3] Rule 컬럼 확인 (체크포인트)")
+    _rule_cols_needed = ["rule_matched", "rule_id", "rule_primary_class"]
+    if not df_test.empty and all(c in df_test.columns for c in _rule_cols_needed):
+        rule_labels_df = df_test[_rule_cols_needed].copy()
+        _n_matched = int(rule_labels_df["rule_matched"].sum())
+        logger.info("  체크포인트에서 Rule 컬럼 로드 완료 (matched=%d건)", _n_matched)
+    else:
+        rule_labels_df = pd.DataFrame()
+        logger.info("  Rule 컬럼 없음 (rule_matched/rule_id/rule_primary_class)")
 
     # ── Step 7: 핵심 지표 ──
     logger.info("[Step 7] 핵심 지표")
     poc_criteria = check_poc_criteria(y_test, y_pred_test, tp_label=tp_label)
     binary_stats = compute_binary_stats(df_label, label_col=label_col)
     class_imbalance = compute_class_imbalance(df_label, label_col=label_col)
-    coverage_curve = compute_coverage_precision_curve(
-        y_test, ml_proba_test, precision_target=args.precision_target,
-    )
+    # Coverage-Precision Curve: training이 저장한 threshold_policy.json 우선 사용
+    coverage_curve = {}
+    _tp_path = Path(args.model_dir) / "final" / "threshold_policy.json"
+    if _tp_path.exists():
+        try:
+            import json as _json_tp
+            with open(_tp_path, "r", encoding="utf-8") as _f_tp:
+                _tp_data = _json_tp.load(_f_tp)
+            coverage_curve = {
+                "recommended_tau": _tp_data.get("recommended_fp_tau"),
+                "curve": pd.DataFrame(_tp_data.get("curve_summary", [])),
+            }
+            logger.info("  threshold_policy.json 로드 (tau=%.2f)",
+                         coverage_curve.get("recommended_tau") or 0.0)
+        except Exception as _e_tp:
+            logger.warning("  threshold_policy.json 로드 실패: %s", _e_tp)
+    if not coverage_curve:
+        coverage_curve = compute_coverage_precision_curve(
+            y_test, ml_proba_test, precision_target=args.precision_target,
+        )
 
     dedup_before = len(df_label)
     pk_cols = [c for c in ["pk_event", "pk_file"] if c in df_label.columns]
@@ -492,40 +491,41 @@ def main(args=None):
     logger.info("[Step 7b] 평가 산출물 생성")
     fi_df = pd.DataFrame()
     fi_groups = {}
-    if model is not None and le is not None and X_all is not None:
-        X_test_eval = X_all[test_idx] if hasattr(X_all, '__getitem__') else None
-        if X_test_eval is not None:
-            y_test_enc = le.transform(y_test)
-            y_pred_enc = model.predict(X_test_eval)
-            _generate_eval_artifacts(
-                model, y_test_enc, y_pred_enc, le, feature_names,
-                df_test, REPORT_DIR,
-            )
+    if model is not None and le is not None and y_pred_enc is not None:
+        _generate_eval_artifacts(
+            model, y_test_enc, y_pred_enc, le, feature_names,
+            df_test, REPORT_DIR,
+        )
         fi_df, fi_groups = _build_feature_importance_data(model, feature_names)
 
     # ── Step 8: Split 비교 ──
     logger.info("[Step 8] Split 비교")
 
     from scripts.run_poc_report import (
-        _build_primary_eval, _build_secondary_eval,
+        _build_primary_eval,
         _build_tertiary_splits, _build_run_metadata,
         _build_business_impact, _build_error_risk_summary,
         _make_split_summary,
     )
 
+    # 체크포인트 기반: train_idx/test_idx는 df_label 인덱스가 아닌 크기 기반
+    # _build_primary_eval 등에 전달할 때 df_label 기준 인덱스가 필요한 경우 대비
+    _n_train = len(y_train) if len(y_train) > 0 else int(len(df_label) * 0.8)
+    _n_test = len(y_test) if len(y_test) > 0 else len(df_label) - _n_train
+    _train_idx_for_report = list(range(_n_train))
+    _test_idx_for_report = list(range(_n_train, _n_train + _n_test))
+
     split_results = [
         _build_primary_eval(
-            df_label, train_idx, test_idx, y_true_all, y_pred_test,
+            df_label, _train_idx_for_report, _test_idx_for_report,
+            y_true_all, y_pred_test,
             tp_label=tp_label,
             coverage_at_target=coverage_curve.get("recommended_tau") or 0.0,
         )
     ]
-    secondary = _build_secondary_eval(df_label, y_true_all, y_pred_all, tp_label=tp_label)
-    if secondary is not None:
-        split_results.append(secondary)
-    _y_pred_for_tert = y_pred_all if not np.all(y_pred_all == tp_label) else None
+    # secondary/tertiary splits: 전체 예측이 없으므로 test 기반만 사용
     split_results.extend(
-        _build_tertiary_splits(df_label, y_true_all, tp_label=tp_label, y_pred_all=_y_pred_for_tert)
+        _build_tertiary_splits(df_label, y_true_all, tp_label=tp_label, y_pred_all=None)
     )
     split_comparison = compute_split_comparison(split_results)
 
@@ -533,6 +533,7 @@ def main(args=None):
     if not model_path_for_meta.exists():
         model_path_for_meta = None
     run_metadata = _build_run_metadata(model_path_for_meta, df_label)
+    run_metadata["note"] = "체크포인트 기반 평가 (run_training.py와 동일 피처/split)"
     business_impact = _build_business_impact(binary_stats, coverage_curve)
     error_risk_summary = _build_error_risk_summary(y_test, y_pred_test, tp_label=tp_label)
 
@@ -555,7 +556,7 @@ def main(args=None):
 
     report_data = PocReportData(
         data_condition=source_cfg["data_condition"],
-        split_summary=_make_split_summary(df_label, train_idx, test_idx),
+        split_summary=_make_split_summary(df_label, _train_idx_for_report, _test_idx_for_report),
         poc_criteria=poc_criteria,
         binary_stats=binary_stats,
         class_imbalance=class_imbalance,

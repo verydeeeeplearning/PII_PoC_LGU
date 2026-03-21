@@ -40,7 +40,7 @@ import numpy as np
 
 from src.utils.common import ensure_dirs
 from src.utils.constants import (
-    MODEL_DIR, FEATURE_DIR, REPORT_DIR, FIGURE_DIR,
+    MODEL_DIR, FINAL_MODEL_DIR, FEATURE_DIR, REPORT_DIR, FIGURES_DIR,
     TEXT_COLUMN, TOP_N_FEATURES, PROCESSED_DATA_DIR,
     POC_F1_MACRO_THRESHOLD, POC_TP_RECALL_THRESHOLD, POC_FP_PRECISION_THRESHOLD,
 )
@@ -233,13 +233,13 @@ def main():
     args = parse_args()
 
     # 디렉토리 생성
-    ensure_dirs(REPORT_DIR, FIGURE_DIR)
+    ensure_dirs(REPORT_DIR, FIGURES_DIR)
 
     # 1. 모델 로드
     print("=" * 60)
     print("[Step 1] 모델 로드")
     print("=" * 60)
-    artifact = load_model_with_meta(str(MODEL_DIR / "final" / "best_model_v1.joblib"))
+    artifact = load_model_with_meta(str(FINAL_MODEL_DIR / "best_model_v1.joblib"))
     model = artifact["model"]
     le = artifact["label_encoder"]
 
@@ -272,7 +272,7 @@ def main():
     print()
     feature_importance_analysis(
         model, feature_names, TOP_N_FEATURES,
-        str(FIGURE_DIR / "feature_importance.png"),
+        str(FIGURES_DIR / "feature_importance.png"),
         str(REPORT_DIR / "feature_importance.csv"),
     )
 

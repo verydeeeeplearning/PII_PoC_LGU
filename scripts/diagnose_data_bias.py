@@ -34,7 +34,9 @@ from scipy.stats import chi2_contingency, mannwhitneyu
 # ─────────────────────────────────────────────────────────────────────────────
 
 LABEL_COL = "label_raw"
-OUTPUT_DIR = PROJECT_ROOT / "outputs" / "diagnosis"
+from src.utils.constants import DIAGNOSIS_DIR
+
+OUTPUT_DIR = DIAGNOSIS_DIR
 
 # 범주형 진단 대상 컬럼
 CATEGORICAL_COLS = [
@@ -605,131 +607,59 @@ def diagnose_split_robustness(df: pd.DataFrame, f):
     write_line(f, "  Temporal holdout (마지막 2~3개월)이 가장 현실적인 검증.")
     write_line(f, "")
 
-    from sklearn.model_selection import GroupShuffleSplit
-    from sklearn.preprocessing import LabelEncoder
-    from lightgbm import LGBMClassifier
-    from sklearn.metrics import f1_score
+    # ------------------------------------------------------------------
+    # 체크포인트 모델 로드 (run_training.py 학습 결과 재사용)
+    # ------------------------------------------------------------------
+    from pathlib import Path
+    _project_root = Path(__file__).resolve().parents[1]
+    _ckpt_dir = _project_root / "models" / "checkpoints"
+    _ckpt5 = _ckpt_dir / "step5_features_silver_label.pkl"
+    _ckpt6 = _ckpt_dir / "step6_model_silver_label.pkl"
 
-    le = LabelEncoder()
-    y_all = le.fit_transform(df[LABEL_COL])
+    _use_checkpoint = _ckpt5.exists() and _ckpt6.exists()
 
-    splits = {}
+    if _use_checkpoint:
+        import joblib
+        from sklearn.metrics import f1_score as _f1_score_fn
+        write_line(f, "  [체크포인트 모델 사용] run_training.py 학습 결과와 동일한 모델/피처로 평가")
+        _d5 = joblib.load(_ckpt5)
+        _d6 = joblib.load(_ckpt6)
+        _result = _d5["result"]
+        _model = _d6["model"]
+        _le = _d5["le"]
+        _X_test = _result["X_test"]
+        _y_test_enc = _d5["y_test_enc"]
+        _y_pred = _model.predict(_X_test)
 
-    # D-0: Temporal split (10~12월 holdout) -- 1순위
-    if "label_work_month" in df.columns:
-        try:
-            from src.evaluation.split_strategies import work_month_time_split, _parse_month_label
+        _f1 = _f1_score_fn(_y_test_enc, _y_pred, average="macro", zero_division=0)
 
-            # 마지막 3개월 holdout (가장 현실적)
-            tr3, te3 = work_month_time_split(df, test_months=3)
-            if len(te3) > 0 and len(tr3) > 0:
-                # test에 포함된 월 확인
-                te_months = sorted(df.iloc[te3]["label_work_month"].unique())
-                tr_months = sorted(df.iloc[tr3]["label_work_month"].unique())
-                splits["temporal_3m"] = (tr3, te3,
-                    f"train={tr_months} -> test={te_months}")
+        # Get split info from result
+        _split_meta = _result.get("split_meta", {})
+        _split_strategy = _split_meta.get("split_strategy", "unknown")
 
-            # 마지막 2개월 holdout
-            tr2, te2 = work_month_time_split(df, test_months=2)
-            if len(te2) > 0 and len(tr2) > 0:
-                te_months = sorted(df.iloc[te2]["label_work_month"].unique())
-                tr_months = sorted(df.iloc[tr2]["label_work_month"].unique())
-                splits["temporal_2m"] = (tr2, te2,
-                    f"train={tr_months} -> test={te_months}")
-        except Exception:
-            pass
+        write_line(f, f"  [checkpoint] F1={_f1:.4f}  "
+                   f"train={_result['X_train'].shape[0]:,}  test={_X_test.shape[0]:,}  "
+                   f"(split: {_split_strategy})")
+        write_line(f, "")
+        write_line(f, "  [참고] 아래 독립 split 실험은 진단 참조용입니다.")
+        write_line(f, "         실제 모델 성능은 위 체크포인트 결과입니다.")
+        write_line(f, "")
 
-    # D-1: Random GroupShuffleSplit (현재 기본 - 비교용)
-    if "pk_file" in df.columns:
-        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-        tr, te = next(gss.split(df, y_all, groups=df["pk_file"]))
-        splits["random_group"] = (tr, te, "GroupShuffleSplit(pk_file) -- 현재 기본값")
-
-    # D-2: Server-level split (새 서버 시나리오)
-    if "server_name" in df.columns:
-        try:
-            from src.evaluation.split_strategies import server_group_split
-            tr, te = server_group_split(df, test_ratio=0.3)
-            if len(te) > 0 and len(tr) > 0:
-                splits["server_group"] = (tr, te, "server_group_split(0.3)")
-        except Exception:
-            pass
-
-    if not splits:
-        write_line(f, "  [SKIP] split 생성 불가")
+    if not _use_checkpoint:
+        write_line(f, "  [SKIP] 체크포인트 없음 — run_training.py 실행 후 다시 시도")
+        write_line(f, "  체크포인트 경로: %s", str(_ckpt5))
         return
 
-    results = []
-    for name, (tr_idx, te_idx, desc) in splits.items():
-        df_tr = df.iloc[tr_idx].copy().reset_index(drop=True)
-        df_te = df.iloc[te_idx].copy().reset_index(drop=True)
-        y_tr = y_all[tr_idx]
-        y_te = y_all[te_idx]
-
-        X_tr, X_te, feat_names = _build_feature_matrix_for_split(df_tr, df_te)
-        if X_tr is None:
-            continue
-
-        try:
-            model = LGBMClassifier(
-                n_estimators=100, max_depth=6, num_leaves=31,
-                random_state=42, verbose=-1, n_jobs=-1,
-            )
-            model.fit(X_tr, y_tr)
-            y_pred = model.predict(X_te)
-            f1 = f1_score(y_te, y_pred, average="macro", zero_division=0)
-        except Exception as e:
-            f1 = -1.0
-            write_line(f, f"  [{name}] 학습 실패: {e}")
-            continue
-
-        results.append({"split": name, "desc": desc, "f1_macro": f1,
-                        "train_n": len(tr_idx), "test_n": len(te_idx)})
-        write_line(f, f"  [{name:20s}] F1={f1:.4f}  train={len(tr_idx):>6,}  test={len(te_idx):>6,}  ({desc})")
-
-    # 해석: temporal이 핵심, random은 비교 기준
-    write_line(f, f"\n  [해석]")
-
-    temporal_results = [r for r in results if r["split"].startswith("temporal")]
-    random_results = [r for r in results if r["split"] == "random_group"]
-
-    if temporal_results:
-        write_line(f, f"  --- Temporal Holdout (운영 현실 시뮬레이션) ---")
-        for r in temporal_results:
-            write_line(f, f"  {r['split']:20s}  F1={r['f1_macro']:.4f}  ({r['desc']})")
-
-        if random_results:
-            random_f1 = random_results[0]["f1_macro"]
-            for r in temporal_results:
-                gap = random_f1 - r["f1_macro"]
-                if gap < 0.05:
-                    verdict = "-> 성능 유지. 모델 신뢰 가능."
-                elif gap < 0.15:
-                    verdict = "-> 보통 수준의 하락. 피처 보완 검토."
-                else:
-                    verdict = "-> 큰 하락. 시간에 따른 분포 변화에 취약."
-                write_line(f, f"  vs random gap: {gap:+.4f}pp  {verdict}")
-    else:
-        write_line(f, f"  [주의] label_work_month 컬럼 없어 temporal split 불가")
-        write_line(f, f"  실 데이터에서 temporal holdout 반드시 확인 필요")
-
-    if random_results:
-        write_line(f, f"\n  --- Random GroupShuffleSplit (낙관적 추정) ---")
-        write_line(f, f"  F1={random_results[0]['f1_macro']:.4f}")
-
-    server_results = [r for r in results if r["split"] == "server_group"]
-    if server_results:
-        write_line(f, f"\n  --- Server Group Split (새 서버 시나리오) ---")
-        write_line(f, f"  F1={server_results[0]['f1_macro']:.4f}")
-        if random_results:
-            gap = random_results[0]["f1_macro"] - server_results[0]["f1_macro"]
-            if gap > 0.15:
-                write_line(f, f"  vs random gap: {gap:+.4f}pp -> 새 서버에 대한 예측력 부족")
-            else:
-                write_line(f, f"  vs random gap: {gap:+.4f}pp -> 서버 변경에도 안정적")
-
-    pd.DataFrame(results).to_csv(OUTPUT_DIR / "split_robustness_report.csv",
-                                  index=False, encoding="utf-8-sig")
+    # 체크포인트 결과를 split_robustness_report.csv에도 저장
+    import pandas as _pd_diag
+    _pd_diag.DataFrame([{
+        "split": _split_strategy,
+        "f1_macro": _f1,
+        "train_n": _result["X_train"].shape[0],
+        "test_n": _X_test.shape[0],
+        "desc": "checkpoint model (run_training.py 학습 결과)",
+    }]).to_csv(OUTPUT_DIR / "split_robustness_report.csv",
+               index=False, encoding="utf-8-sig")
     write_line(f, f"\n  [저장] split_robustness_report.csv")
 
 

@@ -91,12 +91,12 @@ Phase 1(label-only)은 `full_context_raw` 텍스트가 없다. `use_phase1_tfidf
 | Dense — create_file_path_features | file_path | 8 | |
 | Dense — build_meta_features (시간 피처 제외) | 메타 컬럼 | 8 | Wave 3: 시간 4개 제거 |
 | Dense — extract_path_features (비중복 항목) | file_path | 10 | |
-| Dense — 운영 메타데이터 | exception_requested, rule_matched | 2 | Wave 3 신규 |
+| Dense — 운영 메타데이터 | rule_matched | 1 | Wave 3 신규. ~~exception_requested~~: Wave 5에서 제거 (Sumologic에 없음) |
 | **Dense — 서버 의미 토큰** | server_name | **3** | **Wave 4 B7: server_env, server_is_prod, server_stack** |
 | **Dense — RULE 세부 신호** | RuleLabeler | **3** | **Wave 4 B8: rule_confidence_lb + rule_id_enc + rule_primary_class_enc** |
 | **Dense — file-level aggregation** | pk_file 집계 | **2** | **Wave 4 B9: file_event_count, file_pii_diversity (train fold only)** |
 | **Dense — 범주형 Label Encoding** | 메타 컬럼 | **8** | **Wave 4 B1: service/ops_dept/organization/retention_period/server_env/server_stack/rule_id/rule_primary_class → _enc** |
-| **합계 (중복 제거 후)** | | **~454** | |
+| **합계 (중복 제거 후)** | | **~538 (실측)** | exception_requested 제거 후 ~530 예상 |
 
 > **Wave 3 피처 개정 (2026-03-20):** 10M행 실데이터 학습 결과(F1-macro=0.6146) 진단 후, 과적합/누수 피처를 정리하고 강신호 피처를 추가. 상세: `outputs/diagnosis/model_performance_report.md`
 >
@@ -104,8 +104,8 @@ Phase 1(label-only)은 `full_context_raw` 텍스트가 없다. `use_phase1_tfidf
 > - `created_hour`, `created_weekday`, `is_weekend`, `created_month` — 시간대/요일/월은 운영 환경 패턴이지 FP/TP 본질 아님. `created_hour`가 feature importance 1위(22%)였으나, temporal split에서 일반화 불가능한 과적합 신호. `created_month`는 temporal split 분할 기준과 직접 상관하여 split 자체를 학습하는 위험.
 > - `server_freq` — train set의 서버 출현 빈도를 피처로 사용하면 test에 train 통계가 누수됨. 새로운 서버에 대해 0으로 fallback하여 불안정.
 >
-> **추가된 피처 (2개):**
-> - `exception_requested` — 예외 신청 이력(Y/N → 0/1). 샘플 데이터에서 Y=33건 전부 FP로 완전 분리되는 강신호.
+> **추가된 피처 (2개 → Wave 5에서 1개로 축소):**
+> - ~~`exception_requested`~~ — Wave 3에서 추가, **Wave 5에서 제거** (Sumologic에 없어 추론 불가).
 > - `rule_matched` — Step 4 RuleLabeler 결과(0/1). L3 룰 9개의 도메인 지식을 ML 피처로 전달.
 >
 > **TF-IDF 축소:** Phase 1 fname/path 각 `max_features` 500→200. 기존 1000개 TF-IDF 중 97%가 importance=0이었으며, 유효 피처만 남겨 노이즈 감소.
@@ -121,6 +121,20 @@ Phase 1(label-only)은 `full_context_raw` 텍스트가 없다. `use_phase1_tfidf
 > **B8 RULE 세부 신호:** `rule_matched` binary 1bit에서 확장. `rule_id_enc` (12개 룰 구분), `rule_primary_class_enc` (FP 클래스 방향), `rule_confidence_lb` (Bayesian 하한 수치). Step 4에서 기존 버려지던 `rule_confidence_lb` 컬럼 복원.
 >
 > **B9 file-level aggregation:** `compute_file_aggregates_label(df_train)` → `file_event_count` (pk_file당 행 수), `file_pii_diversity` (SSN/Phone/Email 검출 유형 수 0~3). **train fold에서만 계산**, test는 left join + median fallback (누수 방지).
+>
+> **Tier 2 실측 결과:** 10M행 서버 학습, F1-macro=**0.8063** (Baseline 0.6146 대비 +0.19). Feature importance top 3: service_enc(2458), ops_dept_enc(2431), retention_period_enc(2050) — B1 범주형 피처가 주도.
+
+> **Wave 5 Tier 3 (2026-03-21):** Sumologic 추론 가능성 검증 후 피처 정리 + 아키텍처 개선.
+>
+> **exception_requested 제거:** Sumologic 데이터에 해당 컬럼이 없어 추론 시 사용 불가. Wave 3에서 추가 → Wave 5에서 제거.
+>
+> **C1 Easy FP Suppressor:** ML 학습/평가 전 고확신 FP를 규칙 기반으로 선제 분리. 4개 조건 (is_system_device=1, is_package_path+is_mass_detection, is_docker_overlay=1, has_license_path=1). Train에서 purity≥95% 확인 시에만 활성화. Suppressed 행은 ML이 보지 않고 FP로 판정. 최종 평가에서 suppressed + ML residual을 합산하여 F1 출력.
+>
+> **C2 Slice-aware threshold:** server_env별 Coverage-Precision Curve tau를 개별 계산. `threshold_policy.json`에 `slice_thresholds` 딕셔너리로 저장. 운영 시 서버 환경별 차등 tau 적용 가능.
+>
+> **run_report.py 체크포인트 방식으로 전환:** 피처 재생성/split 재실행 제거. `step5_features_*.pkl` + `step6_model_*.pkl`에서 X_test/y_test_enc/model/le를 직접 로드하여 training과 100% 동일한 평가. `threshold_policy.json` 우선 로드.
+>
+> **diagnose_data_bias.py 독립 학습 제거:** `diagnose_split_robustness()`에서 독립 LGBMClassifier 학습 제거. 체크포인트 모델만 사용.
 >
 > **B3 Shape TF-IDF:** file_name에 `_to_shape_text()` 변환 후 char_wb n-gram TF-IDF 100 features 추가. 숫자 n-gram 과적합 감소: `02506` → `DDDDD` 패턴 학습으로 OOV 파일명 내성 증가.
 >
@@ -139,7 +153,7 @@ Phase 1(label-only)은 `full_context_raw` 텍스트가 없다. `use_phase1_tfidf
 | `phase1_fname` char TF-IDF | `TfidfVectorizer(analyzer='char_wb', ngram_range=(2,5), max_features=200)` on `file_name` | ~200 | Wave 3: 500→200 축소 |
 | **`phase1_fname_shape`** char TF-IDF | `TfidfVectorizer(analyzer='char_wb', ngram_range=(2,5), max_features=100)` on `_to_shape_text(file_name)` | ~100 | **Wave 4 B3: 숫자→D 변환으로 과적합 감소** |
 | `phase1_path` word TF-IDF | `TfidfVectorizer(analyzer='word', ngram_range=(1,2), max_features=200)` on `_to_path_text(file_path)` | ~200 | Wave 3: 500→200 축소 |
-| `exception_requested` | 예외 신청 여부 (Y→1, N→0) | 1 | Wave 3 추가 |
+| ~~`exception_requested`~~ | ~~예외 신청 여부 (Y→1, N→0)~~ | ~~1~~ | ~~Wave 3 추가~~ → **Wave 5 제거 (Sumologic에 없음)** |
 | `rule_matched` | Step 4 RuleLabeler 매칭 여부 (0/1) | 1 | Wave 3 추가 |
 | **`server_is_prod`** | server_name에서 prd 토큰 존재 여부 | 1 | **Wave 4 B7** |
 | **`rule_confidence_lb`** | Bayesian precision 하한 | 1 | **Wave 4 B8** |
@@ -169,7 +183,8 @@ X_path_train = tfidf_path.fit_transform(df_train['file_path'].fillna('').apply(_
 X_path_test  = tfidf_path.transform(df_test['file_path'].fillna('').apply(_to_path_text))
 
 # 3. server_freq — Wave 3에서 삭제됨 (train 통계 누수 위험)
-# 4. exception_requested (Y/N → 0/1) + rule_matched (0/1) — Wave 3 추가
+# 4. rule_matched (0/1) — Wave 3 추가
+# exception_requested — Wave 5에서 제거 (Sumologic에 없음)
 #    _PRECOMPUTED_DENSE_COLS에 포함, run_training.py Step 4 이후 int 변환
 ```
 

@@ -8,9 +8,10 @@
   "tfidf_mode": "none",
   "tfidf_views": [
     "phase1_fname",
+    "phase1_fname_shape",
     "phase1_path"
   ],
   "random_seed": 42,
   "use_synthetic_expansion": false,
-  "total_features": 354
+  "total_features": 442
 }
