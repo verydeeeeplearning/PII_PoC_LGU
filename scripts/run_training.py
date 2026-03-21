@@ -800,6 +800,7 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
     print(f"  저장 완료: {model_output_path}")
 
     # ── Step 8: Calibration (확률 보정) ──
+    # calibrated_model은 Step 9에서 calibrator.joblib로 저장됨
     print(f"\n[Step 8] Calibration")
     calibrated_model = None
     try:
@@ -808,10 +809,7 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
             model, X_train, y_train_enc, le,
             method="isotonic", cv=3,
         )
-        _cal_path = model_output_path.parent / (model_output_path.stem + "_calibrated.joblib")
-        import joblib as _jl
-        _jl.dump({"model": calibrated_model, "label_encoder": le, "f1_macro": f1}, _cal_path)
-        print(f"  Calibrated 모델 저장: {_cal_path}")
+        print(f"  Calibration 완료 (Step 9에서 calibrator.joblib로 저장)")
     except Exception as _e:
         print(f"  [경고] Calibration 실패 (건너뜀): {_e}")
 
