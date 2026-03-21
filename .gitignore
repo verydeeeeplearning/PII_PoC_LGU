@@ -40,6 +40,9 @@ desktop.ini
 .idea/
 *.swp
 
+# Offline packages (large binaries)
+offline_packages/
+
 # Temp
 *.tar
 image*.png
