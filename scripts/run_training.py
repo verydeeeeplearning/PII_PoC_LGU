@@ -114,12 +114,6 @@ def parse_args():
         help="Repeated GroupShuffleSplit split 횟수 (분산 추정용, 기본: 1)",
     )
     parser.add_argument(
-        "--calibrate",
-        action="store_true",
-        default=False,
-        help="Calibration 적용 여부 (기본: False)",
-    )
-    parser.add_argument(
         "--resume",
         action="store_true",
         default=False,
@@ -138,6 +132,18 @@ def parse_args():
         type=int,
         default=3,
         help="temporal split 시 테스트 월 수 (기본: 3 -> 마지막 3개월)",
+    )
+    parser.add_argument(
+        "--use-multiclass",
+        action="store_true",
+        default=False,
+        help="fp_description 기반 7-class 학습 (추론 시 binary collapse)",
+    )
+    parser.add_argument(
+        "--tp-weight",
+        type=float,
+        default=1.0,
+        help="TP 샘플 가중치 배수 (기본 1.0=비활성, class_weight=balanced만 사용)",
     )
     return parser.parse_args()
 
@@ -270,9 +276,6 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
     """
     import joblib
 
-    from src.features.meta_features import build_meta_features
-    from src.features.path_features import extract_path_features
-    from src.filters.rule_labeler import RuleLabeler
     from src.features.pipeline import build_features
     from src.models.trainer import encode_labels, train_lightgbm, save_model_with_meta
 
@@ -280,7 +283,16 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
     silver_label_path = source_path or (PROCESSED_DATA_DIR / "silver_label.parquet")
     rules_yaml_path   = PROJECT_ROOT / "config" / "rules.yaml"
     rule_stats_path   = PROJECT_ROOT / "config" / "rule_stats.json"
-    model_output_path = FINAL_MODEL_DIR / "phase1_label_lgb.joblib"
+
+    # joined(detection) 소스인 경우 아티팩트 경로 분리
+    _is_joined = (source_path is not None)
+    if _is_joined:
+        _artifact_prefix = "joined_"
+        _model_name = "LightGBM_phase1_joined"
+    else:
+        _artifact_prefix = ""
+        _model_name = "LightGBM_phase1_label"
+    model_output_path = FINAL_MODEL_DIR / f"{_artifact_prefix}phase1_lgb.joblib"
 
     # ── 체크포인트 설정 ──
     # 소스 파일명으로 구분 (silver_label vs silver_joined 혼용 방지)
@@ -353,83 +365,57 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         else:
             print(f"  [체크포인트 이미 존재 - 저장 생략] {_ckpt1.name}")
 
-    # Step 2: 메타/경로 피처 추가 (청크 처리로 메모리 절약)
-    _META_CHUNK = 500_000
+    # Step 2: 피처 준비 (meta + path + RuleLabeler)
     if _resume_from < 2:
-        print(f"\n[Step 2] 메타/경로 피처 추출 (청크 크기: {_META_CHUNK:,})")
-        _meta_chunks = []
-        for _s in range(0, len(df), _META_CHUNK):
-            _e = min(_s + _META_CHUNK, len(df))
-            _c = build_meta_features(df.iloc[_s:_e].copy())
-            if "file_path" in _c.columns:
-                _path_feats = _c["file_path"].apply(extract_path_features)
-                _path_df = pd.DataFrame(list(_path_feats), index=_c.index)
-                for _col in _path_df.columns:
-                    if _col not in _c.columns:
-                        _c[_col] = _path_df[_col]
-            _meta_chunks.append(_c)
-            print(f"  [{_s:,}~{_e:,}] 완료", flush=True)
-        df = pd.concat(_meta_chunks, ignore_index=True)
-        del _meta_chunks
-        print(f"  메타 피처 추가 완료. 전체 컬럼: {df.shape[1]}")
+        from src.features.feature_preparer import prepare_phase1_features
+
+        print(f"\n[Step 2] 피처 준비 (meta + path + RuleLabeler)")
+        df = prepare_phase1_features(
+            df,
+            rules_yaml_path=rules_yaml_path,
+            rule_stats_path=rule_stats_path,
+        )
         if not _ckpt2.exists():
             joblib.dump(df, _ckpt2)
             print(f"  [체크포인트 저장] {_ckpt2.name}")
         else:
             print(f"  [체크포인트 이미 존재 - 저장 생략] {_ckpt2.name}")
 
-    # Step 3: 레이블 컬럼 정규화
+    # Step 3: 레이블 정규화
     if _resume_from < 3:
-        print(f"\n[Step 3] 레이블 컬럼 정규화")
         if "label_raw" not in df.columns:
             print("  [오류] label_raw 컬럼 없음 - silver_label.parquet 재생성 필요")
             return
-        df["label_binary"] = df["label_raw"]
-        print(f"  레이블 분포:\n{df['label_binary'].value_counts().to_string()}")
+
+        print(f"\n[Step 3] 레이블 정규화")
+        if getattr(args, "use_multiclass", False) and "fp_description" in df.columns:
+            from src.features.fp_classifier import classify_fp_description as _classify_fp
+            print(f"  Multi-class 레이블 생성 (fp_description → 7-class)")
+            df["label_binary"] = df.apply(
+                lambda row: (
+                    "TP-실제개인정보" if row["label_raw"] == "TP"
+                    else _classify_fp(str(row.get("fp_description", "")))
+                ), axis=1,
+            )
+            df.loc[df["label_binary"] == "UNKNOWN", "label_binary"] = "FP"
+        else:
+            df["label_binary"] = df["label_raw"]
+
         if not _ckpt3.exists():
             joblib.dump(df, _ckpt3)
             print(f"  [체크포인트 저장] {_ckpt3.name}")
         else:
             print(f"  [체크포인트 이미 존재 - 저장 생략] {_ckpt3.name}")
 
-    # Step 4: RuleLabeler 실행 (청크 처리로 메모리 절약)
-    _RULE_CHUNK = 500_000
+    # Step 4: 피처 전처리 완료 확인
     if _resume_from < 4:
-        print(f"\n[Step 4] RuleLabeler 적용 (청크 크기: {_RULE_CHUNK:,})")
-        if rules_yaml_path.exists() and rule_stats_path.exists():
-            labeler = RuleLabeler.from_config_files(str(rules_yaml_path), str(rule_stats_path))
-            _label_chunks = []
-            for _s in range(0, len(df), _RULE_CHUNK):
-                _e = min(_s + _RULE_CHUNK, len(df))
-                _chunk_labels, _ = labeler.label_batch(df.iloc[_s:_e])
-                # [Tier 2 B8] rule_confidence_lb 포함하여 RULE 세부 신호 캡처
-                _rule_cols = ["rule_matched", "rule_primary_class", "rule_id", "rule_confidence_lb"]
-                _rule_cols_present = [c for c in _rule_cols if c in _chunk_labels.columns]
-                _label_chunks.append(_chunk_labels[_rule_cols_present])
-                print(f"  [{_s:,}~{_e:,}] 완료", flush=True)
-            _rule_df = pd.concat(_label_chunks, ignore_index=True)
-            # merge 대신 인덱스 직접 할당 (pk_event 중복 시 카르테시안 곱 방지)
-            df = df.reset_index(drop=True)
-            df["rule_matched"]       = _rule_df["rule_matched"].values
-            df["rule_primary_class"] = _rule_df["rule_primary_class"].values
-            df["rule_id"]            = _rule_df["rule_id"].values
-            # [Tier 2 B8] rule_confidence_lb 추가 (numeric)
-            if "rule_confidence_lb" in _rule_df.columns:
-                df["rule_confidence_lb"] = pd.to_numeric(
-                    _rule_df["rule_confidence_lb"], errors="coerce"
-                ).fillna(0.0).values
-            del _label_chunks, _rule_df
-            print(f"  룰 매칭 완료. rule_matched + rule_confidence_lb 컬럼 추가됨")
-        else:
-            print(f"  [경고] 룰 설정 파일 없음 - RuleLabeler 건너뜀")
+        print(f"\n[Step 4] 피처 + 레이블 준비 완료")
+        print(f"  레이블 분포:\n{df['label_binary'].value_counts().to_string()}")
         if not _ckpt4.exists():
             joblib.dump(df, _ckpt4)
             print(f"  [체크포인트 저장] {_ckpt4.name}")
         else:
             print(f"  [체크포인트 이미 존재 - 저장 생략] {_ckpt4.name}")
-
-    label_counts = df["label_binary"].value_counts()
-    print(f"\n  레이블 분포:\n{label_counts.to_string()}")
 
     # ── 피처 전처리: 문자열 → 숫자 변환 ──
     if "exception_requested" in df.columns:
@@ -475,6 +461,8 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
             "rule_confidence_lb",
             # [Tier 2 B9] file-level aggregation (파이프라인에서 계산)
             "file_event_count", "file_pii_diversity",
+            # 파일 크기
+            "file_size", "file_size_log1p",
         ]
         _keep = [c for c in _KEEP_COLS if c in df.columns]
         df_for_features = df[_keep]
@@ -508,7 +496,8 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
             test_months=_test_months,
         )
 
-        # [Tier 2 B9] file-level aggregation: train fold에서만 계산 → test에 left join
+        # [Tier 2 B9] file-level aggregation: train fold에서만 계산 → df에 추가 (참조용)
+        # NOTE: X_train/X_test matrix에는 주입하지 않음 (temporal split 노이즈 방지)
         if _do_file_agg:
             from src.features.meta_features import (
                 compute_file_aggregates_label, merge_file_aggregates_label,
@@ -519,14 +508,9 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
                 _file_agg = compute_file_aggregates_label(_df_tr)
                 _df_tr = merge_file_aggregates_label(_df_tr, _file_agg)
                 _df_te = merge_file_aggregates_label(_df_te, _file_agg)
-                # unseen pk_file → global median으로 대체
-                for _ac in ["file_event_count", "file_pii_diversity"]:
-                    if _ac in _df_tr.columns:
-                        _median = _df_tr[_ac].median()
-                        _df_te[_ac] = _df_te[_ac].fillna(_median)
                 result["df_train"] = _df_tr
                 result["df_test"] = _df_te
-                print(f"  [Tier 2 B9] file aggregation: file_event_count, file_pii_diversity 추가")
+                print(f"  [Tier 2 B9] file aggregation: df에 추가 (X_train 미주입)")
 
         save_feature_artifacts(result, str(FEATURE_DIR), str(MODEL_DIR))
         y_train_enc, y_test_enc, le = encode_labels(result["y_train"], result["y_test"])
@@ -552,8 +536,6 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         return
 
     # ── [Tier 3 C1] Easy FP Suppressor — 고확신 FP 선제 분리 ──
-    # 고순도 FP 조건에 해당하는 행을 ML 학습/평가 전에 분리한다.
-    # Suppressor가 처리한 행은 ML이 보지 않으므로, ML이 hard case에 집중한다.
     import numpy as _np
 
     _df_tr = result.get("df_train", pd.DataFrame())
@@ -562,16 +544,12 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
     def _easy_fp_mask(df_slice):
         """Sumologic에서 사용 가능한 컬럼만으로 고확신 FP 조건 판별."""
         mask = pd.Series(False, index=df_slice.index)
-        # 조건 1: 시스템 장치 경로 (is_system_device=1)
         if "is_system_device" in df_slice.columns:
             mask = mask | (df_slice["is_system_device"] == 1)
-        # 조건 2: 패키지 경로 + 대량 검출 (is_package_path=1 AND is_mass_detection=1)
         if "is_package_path" in df_slice.columns and "is_mass_detection" in df_slice.columns:
             mask = mask | ((df_slice["is_package_path"] == 1) & (df_slice["is_mass_detection"] == 1))
-        # 조건 3: Docker overlay (is_docker_overlay=1)
         if "is_docker_overlay" in df_slice.columns:
             mask = mask | (df_slice["is_docker_overlay"] == 1)
-        # 조건 4: 라이선스 경로 (has_license_path=1)
         if "has_license_path" in df_slice.columns:
             mask = mask | (df_slice["has_license_path"] == 1)
         return mask
@@ -579,7 +557,6 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
     _easy_fp_train_mask = _easy_fp_mask(_df_tr)
     _easy_fp_test_mask = _easy_fp_mask(_df_te)
 
-    # Suppressor 순도(purity) 검증 — train에서 실제 FP 비율 확인
     _y_train_str = le.inverse_transform(y_train_enc)
     _easy_fp_train_labels = _y_train_str[_easy_fp_train_mask.values]
     _easy_fp_count = _easy_fp_train_mask.sum()
@@ -593,42 +570,34 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         print(f"  Purity (실제 FP 비율): {_easy_fp_purity:.4f}")
         print(f"  TP 유출: {_easy_tp_leak:,}건")
 
-        # purity 95% 이상일 때만 suppressor 활성화
         if _easy_fp_purity >= 0.95:
             print(f"  → Purity ≥ 0.95: Suppressor 활성화")
-            # train/test에서 easy FP 제거 → residual만 ML에 전달
             _residual_train_mask = ~_easy_fp_train_mask.values
             _residual_test_mask = ~_easy_fp_test_mask.values
 
-            # suppressed test의 ground truth를 먼저 저장 (슬라이싱 전)
             _suppressed_test_y = le.inverse_transform(
                 y_test_enc[_easy_fp_test_mask.values]
             ) if _easy_fp_test_mask.sum() > 0 else _np.array([])
             _suppressed_test_count = int(_easy_fp_test_mask.sum())
 
-            # 이제 residual만 남김
             X_train = X_train[_residual_train_mask]
             X_test = X_test[_residual_test_mask]
             y_train_enc = y_train_enc[_residual_train_mask]
             y_test_enc = y_test_enc[_residual_test_mask]
-            _sample_weight_offset = True
 
-            # df_train/df_test도 갱신
             _df_tr = _df_tr[_residual_train_mask].reset_index(drop=True)
             _df_te = _df_te[_residual_test_mask].reset_index(drop=True)
 
             print(f"  Residual train: {X_train.shape[0]:,}건  test: {X_test.shape[0]:,}건")
             print(f"  Suppressed test: {_suppressed_test_count:,}건")
         else:
-            print(f"  → Purity < 0.95 ({_easy_fp_purity:.4f}): Suppressor 비활성화 (TP 유출 위험)")
+            print(f"  → Purity < 0.95: Suppressor 비활성화")
             _suppressed_test_y = _np.array([])
             _suppressed_test_count = 0
-            _sample_weight_offset = False
     else:
         print(f"\n[Tier 3 C1] Easy FP Suppressor: 해당 조건 0건 → 비활성화")
         _suppressed_test_y = _np.array([])
         _suppressed_test_count = 0
-        _sample_weight_offset = False
 
     # ── [Tier 2 B2] 중복 샘플 가중치 계산 ──
     _sample_weight = None
@@ -644,6 +613,19 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         print(f"  고유 (file_path, file_name) 그룹: {_n_unique:,} / 전체 행: {_n_total:,}")
         print(f"  weight range: [{_sample_weight.min():.4f}, {_sample_weight.max():.4f}], "
               f"mean={_sample_weight.mean():.4f}")
+
+    # ── TP 가중치 (기본 비활성, --tp-weight로 조정) ──
+    _tp_weight_multiplier = getattr(args, "tp_weight", 1.0)
+    if _tp_weight_multiplier != 1.0 and _sample_weight is not None and le is not None:
+        _y_train_labels = le.inverse_transform(y_train_enc)
+        _tp_mask = _np.array(["TP" in str(c) for c in _y_train_labels])
+        if _tp_mask.any():
+            _sample_weight[_tp_mask] *= _tp_weight_multiplier
+            _sample_weight = _sample_weight / _sample_weight.mean()  # re-normalize
+            print(f"\n[TP Weight] multiplier={_tp_weight_multiplier}, "
+                  f"TP samples={_tp_mask.sum():,}/{len(_tp_mask):,}")
+    else:
+        print(f"\n[TP Weight] 비활성 (multiplier=1.0, class_weight=balanced만 사용)")
 
     # ── Step 6: LightGBM 학습 ──
     if _resume_from >= 6:
@@ -685,12 +667,23 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         # 합산
         _combined_y_true = _np.concatenate([le.inverse_transform(y_test_enc), _suppressed_test_y])
         _combined_y_pred = _np.concatenate([_ml_pred_test, _suppressed_pred])
-        _combined_f1 = _f1_fn(_combined_y_true, _combined_y_pred, average="macro", zero_division=0)
-        print(f"\n[Tier 3 C1] 합산 평가 (Suppressed + ML Residual)")
-        print(f"  ML Residual F1: {f1:.4f} ({X_test.shape[0]:,}건)")
-        print(f"  Suppressed: {_suppressed_test_count:,}건 (전부 FP 판정)")
-        print(f"  합산 F1-macro: {_combined_f1:.4f} ({len(_combined_y_true):,}건)")
-        print(_cr_fn(_combined_y_true, _combined_y_pred, zero_division=0))
+        # multi-class → binary collapse for evaluation
+        if getattr(args, "use_multiclass", False):
+            _y_true_bin = _np.array(["TP" if "TP" in str(c) else "FP" for c in _combined_y_true])
+            _y_pred_bin = _np.array(["TP" if "TP" in str(c) else "FP" for c in _combined_y_pred])
+            _combined_f1 = _f1_fn(_y_true_bin, _y_pred_bin, average="macro", zero_division=0)
+            print(f"\n[Tier 3 C1] 합산 평가 (Suppressed + ML Residual, binary collapse)")
+            print(f"  ML Residual F1: {f1:.4f} ({X_test.shape[0]:,}건)")
+            print(f"  Suppressed: {_suppressed_test_count:,}건 (전부 FP 판정)")
+            print(f"  합산 F1-macro (binary): {_combined_f1:.4f} ({len(_y_true_bin):,}건)")
+            print(_cr_fn(_y_true_bin, _y_pred_bin, zero_division=0))
+        else:
+            _combined_f1 = _f1_fn(_combined_y_true, _combined_y_pred, average="macro", zero_division=0)
+            print(f"\n[Tier 3 C1] 합산 평가 (Suppressed + ML Residual)")
+            print(f"  ML Residual F1: {f1:.4f} ({X_test.shape[0]:,}건)")
+            print(f"  Suppressed: {_suppressed_test_count:,}건 (전부 FP 판정)")
+            print(f"  합산 F1-macro: {_combined_f1:.4f} ({len(_combined_y_true):,}건)")
+            print(_cr_fn(_combined_y_true, _combined_y_pred, zero_division=0))
 
     # ── Step 6c: Coverage-Precision Curve (threshold 최적화) ──
     print(f"\n[Step 6c] Coverage-Precision Curve (τ 스윕)")
@@ -799,23 +792,9 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
     joblib.dump({"model": model, "label_encoder": le, "f1_macro": f1}, model_output_path)
     print(f"  저장 완료: {model_output_path}")
 
-    # ── Step 8: Calibration (확률 보정) ──
-    # calibrated_model은 Step 9에서 calibrator.joblib로 저장됨
-    print(f"\n[Step 8] Calibration")
-    calibrated_model = None
-    try:
-        from src.models.trainer import calibrate_model
-        calibrated_model = calibrate_model(
-            model, X_train, y_train_enc, le,
-            method="isotonic", cv=3,
-        )
-        print(f"  Calibration 완료 (Step 9에서 calibrator.joblib로 저장)")
-    except Exception as _e:
-        print(f"  [경고] Calibration 실패 (건너뜀): {_e}")
-
-    # ── Step 9: 표준 아티팩트 저장 (models/final/) ──
+    # ── Step 8: 표준 아티팩트 저장 (models/final/) ──
     # run_inference.py가 기대하는 표준 경로에 모든 아티팩트를 저장한다.
-    print(f"\n[Step 9] 표준 아티팩트 저장 -> {FINAL_MODEL_DIR}")
+    print(f"\n[Step 8] 표준 아티팩트 저장 -> {FINAL_MODEL_DIR}")
     try:
         import json as _json
         import traceback as _tb
@@ -825,24 +804,24 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         _final_dir = FINAL_MODEL_DIR
         _final_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. best_model_v1.joblib (run_inference.py 기본 경로)
+        # 1. best_model_v1.joblib (label) / joined_best_model_v1.joblib (joined)
         save_model_with_meta(
             model=model,
-            path=str(_final_dir / "best_model_v1.joblib"),
+            path=str(_final_dir / f"{_artifact_prefix}best_model_v1.joblib"),
             label_encoder=le,
             f1_score_val=f1,
-            model_name="LightGBM_phase1_label",
+            model_name=_model_name,
             train_size=X_train.shape[0],
             test_size=X_test.shape[0],
             feature_count=X_train.shape[1],
         )
 
         # 2. label_encoder.joblib
-        joblib.dump(le, _final_dir / "label_encoder.joblib")
+        joblib.dump(le, _final_dir / f"{_artifact_prefix}label_encoder.joblib")
 
         # 3. feature_builder.joblib
         _snapshot = FeatureBuilderSnapshot.from_build_result(result)
-        _snapshot.save(str(_final_dir / "feature_builder.joblib"))
+        _snapshot.save(str(_final_dir / f"{_artifact_prefix}feature_builder.joblib"))
         _n_dense = len(_snapshot.dense_columns)
 
         # 4. ood_detector.joblib (dense 피처 부분에 적합)
@@ -853,21 +832,12 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
                 _X_dense = X_train[:, _n_tfidf:].toarray()
                 _ood = OODDetector()
                 _ood.fit(_X_dense)
-                _ood.save(str(_final_dir / "ood_detector.joblib"))
+                _ood.save(str(_final_dir / f"{_artifact_prefix}ood_detector.joblib"))
                 _ood_saved = True
             except Exception as _e_ood:
                 print(f"  [경고] OOD Detector 학습 실패 (건너뜀): {_e_ood}")
 
-        # 5. calibrator.joblib
-        _cal_saved = False
-        if calibrated_model is not None:
-            joblib.dump(
-                {"model": calibrated_model, "label_encoder": le, "f1_macro": f1},
-                _final_dir / "calibrator.joblib",
-            )
-            _cal_saved = True
-
-        # 6. feature_schema.json
+        # 5. feature_schema.json
         _tfidf_views = list(result.get("tfidf_vectorizers", {}).keys())
         _schema = {
             "n_features": len(_snapshot.feature_names),
@@ -877,15 +847,14 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
             "dense_columns": _snapshot.dense_columns,
             "saved_at": datetime.now().isoformat(),
         }
-        with open(_final_dir / "feature_schema.json", "w", encoding="utf-8") as _f:
+        with open(_final_dir / f"{_artifact_prefix}feature_schema.json", "w", encoding="utf-8") as _f:
             _json.dump(_schema, _f, indent=2, ensure_ascii=False)
 
-        print(f"  [OK] best_model_v1.joblib  (F1={f1:.4f})")
-        print(f"  [OK] label_encoder.joblib  (classes={list(le.classes_)})")
-        print(f"  [OK] feature_builder.joblib  (TF-IDF views={_tfidf_views}, dense={_n_dense}개)")
-        print(f"  {'[OK]' if _ood_saved else '[NG]'} ood_detector.joblib  ({_n_dense}차원 dense)")
-        print(f"  {'[OK]' if _cal_saved else '[NG]'} calibrator.joblib")
-        print(f"  [OK] feature_schema.json")
+        print(f"  [OK] {_artifact_prefix}best_model_v1.joblib  (F1={f1:.4f})")
+        print(f"  [OK] {_artifact_prefix}label_encoder.joblib  (classes={list(le.classes_)})")
+        print(f"  [OK] {_artifact_prefix}feature_builder.joblib  (TF-IDF views={_tfidf_views}, dense={_n_dense}개)")
+        print(f"  {'[OK]' if _ood_saved else '[NG]'} {_artifact_prefix}ood_detector.joblib  ({_n_dense}차원 dense)")
+        print(f"  [OK] {_artifact_prefix}feature_schema.json")
 
     except Exception as _e:
         print(f"  [경고] 표준 아티팩트 저장 실패: {_e}")
@@ -1199,7 +1168,8 @@ def main():
         return
 
     if args.source == "detection":
-        _run_detection_mode(args)
+        # silver_joined.parquet 기반으로 label 모드와 동일한 파이프라인 사용
+        _run_label_mode(args, source_path=PROCESSED_DATA_DIR / "silver_joined.parquet")
         return
 
     set_seed(RANDOM_SEED)

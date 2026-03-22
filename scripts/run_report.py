@@ -52,8 +52,8 @@ _SOURCE_CONFIG = {
         "data_condition": "Label Only",
     },
     "detection": {
-        "model_file": "detection_best_model_v1.joblib",
-        "feature_builder_file": "detection_feature_builder.joblib",
+        "model_file": "joined_best_model_v1.joblib",
+        "feature_builder_file": "joined_feature_builder.joblib",
         "silver_parquet": "silver_joined.parquet",
         "output_file": "poc_report_detection.xlsx",
         "data_condition": "Label + Sumologic",
@@ -413,6 +413,110 @@ def main(args=None):
         except Exception as exc:
             logger.warning("  ML 예측 실패: %s", exc)
 
+    # ── Step 2b: Decision Combiner 시뮬레이션 ──
+    dc_eval_result = {}
+    if model is not None and X_test is not None and not df_test.empty:
+        logger.info("[Step 2b] Decision Combiner 시뮬레이션")
+        try:
+            from src.models.trainer import predict_with_uncertainty
+            from src.models.decision_combiner import combine_decisions
+            from sklearn.metrics import (
+                confusion_matrix as _cm_fn, f1_score as _dc_f1,
+                classification_report as _dc_cr,
+            )
+
+            _ml_pred_df = predict_with_uncertainty(
+                model, X_test,
+                pk_events=(df_test["pk_event"].tolist()
+                           if "pk_event" in df_test.columns else None),
+                label_names=list(le.classes_),
+            )
+
+            # 벡터화 Decision Combiner — 행 단위 루프 대신 일괄 처리
+            _rule_matched = df_test["rule_matched"].values if "rule_matched" in df_test.columns else np.zeros(len(df_test), dtype=bool)
+            _rule_conf = df_test["rule_confidence_lb"].values if "rule_confidence_lb" in df_test.columns else np.zeros(len(df_test))
+            _rule_class = df_test["rule_primary_class"].values if "rule_primary_class" in df_test.columns else np.full(len(df_test), "")
+            _rule_id = df_test["rule_id"].values if "rule_id" in df_test.columns else np.full(len(df_test), "")
+
+            _ml_class = _ml_pred_df["ml_top1_class_name"].values if "ml_top1_class_name" in _ml_pred_df.columns else np.full(len(df_test), "FP")
+            _ml_proba = _ml_pred_df["ml_tp_proba"].values if "ml_tp_proba" in _ml_pred_df.columns else np.zeros(len(df_test))
+
+            # 벡터화 판정: RULE 매칭 여부 + ML 예측 결합
+            _n = len(df_test)
+            _dc_primary = np.empty(_n, dtype=object)
+            _dc_source = np.empty(_n, dtype=object)
+            _dc_reason = np.empty(_n, dtype=object)
+
+            _rule_hit = np.array(_rule_matched, dtype=bool)
+            _rule_high_conf = np.array(_rule_conf, dtype=float) >= 0.5
+
+            # Case 1: RULE 매칭 + 고확신 → RULE 결과 사용
+            _case1 = _rule_hit & _rule_high_conf
+            _dc_primary[_case1] = _rule_class[_case1]
+            _dc_source[_case1] = "RULE"
+            _dc_reason[_case1] = "RULE_HIGH_CONFIDENCE"
+
+            # Case 2: RULE 미매칭 또는 저확신 → ML 결과 사용
+            _case2 = ~_case1
+            _dc_primary[_case2] = _ml_class[_case2]
+            _dc_source[_case2] = "ML"
+            _dc_reason[_case2] = "ML_PREDICTION"
+
+            # TP override: ML이 TP 고확신(>0.6)인데 RULE이 FP → TP로 override
+            _tp_override = _case1 & (_ml_proba > 0.6) & np.array(["FP" in str(c) for c in _rule_class])
+            _dc_primary[_tp_override] = "TP"
+            _dc_source[_tp_override] = "ML_OVERRIDE"
+            _dc_reason[_tp_override] = "RULE_ML_CONFLICT"
+
+            _dc_df = pd.DataFrame({
+                "primary_class": _dc_primary,
+                "decision_source": _dc_source,
+                "reason_code": _dc_reason,
+            })
+
+            # binary collapse: TP vs FP
+            _dc_pred_bin = np.array([
+                "TP" if "TP" in str(c) else "FP"
+                for c in _dc_df["primary_class"]
+            ])
+            _dc_true_bin = np.array([
+                "TP" if "TP" in str(c) else "FP"
+                for c in y_test
+            ])
+
+            _dc_f1_val = float(_dc_f1(_dc_true_bin, _dc_pred_bin, average="macro"))
+            _dc_cm = _cm_fn(_dc_true_bin, _dc_pred_bin, labels=["FP", "TP"])
+
+            # Case 분포
+            _dc_source_counts = _dc_df["decision_source"].value_counts().to_dict()
+            _dc_reason_counts = _dc_df["reason_code"].value_counts().to_dict()
+
+            # ML 단독 F1 (binary)
+            _ml_pred_bin = np.array([
+                "TP" if "TP" in str(c) else "FP"
+                for c in y_pred_test
+            ])
+            _ml_f1_val = float(_dc_f1(_dc_true_bin, _ml_pred_bin, average="macro"))
+
+            dc_eval_result = {
+                "dc_f1": _dc_f1_val,
+                "ml_f1": _ml_f1_val,
+                "confusion_matrix": pd.DataFrame(
+                    _dc_cm, index=["실제FP", "실제TP"], columns=["예측FP", "예측TP"]
+                ),
+                "decision_source_dist": _dc_source_counts,
+                "reason_code_dist": _dc_reason_counts,
+                "total_samples": len(_dc_df),
+            }
+
+            logger.info("  Decision Combiner F1-macro: %.4f (ML 단독: %.4f)",
+                         _dc_f1_val, _ml_f1_val)
+            logger.info("  Confusion Matrix:\n%s",
+                         dc_eval_result["confusion_matrix"].to_string())
+            logger.info("  Decision Source: %s", _dc_source_counts)
+        except Exception as _dc_exc:
+            logger.warning("  Decision Combiner 시뮬레이션 실패: %s", _dc_exc)
+
     # ── Rule 컬럼 확인 (training Step 4에서 이미 적용됨 → 재실행 불필요) ──
     logger.info("[Step 3] Rule 컬럼 확인 (체크포인트)")
     _rule_cols_needed = ["rule_matched", "rule_id", "rule_primary_class"]
@@ -582,6 +686,8 @@ def main(args=None):
         column_risk_registry=diag_results["column_risk_registry"],
         split_robustness=diag_results["split_robustness"],
         ablation_results=diag_results["ablation_results"],
+        # Sheet 10 - Decision Combiner
+        dc_eval_result=dc_eval_result,
     )
 
     output_path = Path(output_path)

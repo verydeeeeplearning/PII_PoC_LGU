@@ -62,7 +62,7 @@ TP 클래스(1개, 정탐 파일 출처 자동 부여):
 
 ---
 
-## 3. 현재 구현 스냅샷 (2026-03-20)
+## 3. 현재 구현 스냅샷 (2026-03-22)
 
 | 항목 | 상태 |
 |------|------|
@@ -74,12 +74,14 @@ TP 클래스(1개, 정탐 파일 출처 자동 부여):
 | 학습 파이프라인 | `run_training.py --source label` (silver_label 기반) / `--source detection` (silver_joined 기반) |
 | **학습 Split 전략** | `--split group` (기본, GroupShuffleSplit) / `--split temporal --test-months 3` (행 단위 엄격 월 분할) / `--split server` (서버 분할) |
 | 평가 파이프라인 | `scripts/run_evaluation.py` (레거시, run_report.py로 대체 권장) |
-| **통합 리포트** | **`scripts/run_report.py --source label\|detection`** — eval + PoC report + 진단을 9-sheet Excel로 통합. `--include-diagnosis`로 데이터 진단 포함 |
+| **통합 리포트** | **`scripts/run_report.py --source label\|detection`** — eval + PoC report + 진단을 10-sheet Excel로 통합. `--include-diagnosis`로 데이터 진단 포함 |
 | **데이터 진단** | **`scripts/diagnose_data_bias.py`** — Column 편향, Split Robustness, Feature Ablation 독립 실행 |
 | Feature 분할 | `GroupShuffleSplit(groups=pk_file)` 기본 + temporal/server split 추가 완료 |
 | **Wave 3 피처 개정** | 시간 피처 4개 + server_freq 제거, exception_requested/rule_matched 추가, Phase 1 TF-IDF 500→200 축소 |
 | **Tier 2 Round 1** | B2 중복 가중치(`1/sqrt(group_size)`) + B7 server_env/stack/is_prod + B1 범주형 8개 Label Encoding + B8 rule_confidence_lb/rule_id/class + B9 file_event_count/pii_diversity |
 | **Tier 2 Round 2** | B3 Shape TF-IDF (file_name shape 100 features) + B6 정규화 강화 (min_child_samples=200, reg_alpha=0.5, max_depth=10) |
+| **Tier 3 C1** | Easy FP Suppressor — is_system_device/is_package_path+mass/is_docker_overlay/has_license_path 조건 고확신 FP 선제 분리 (purity≥95% 시 활성화) |
+| **Tier 3 C2** | Slice-aware threshold — server_env별 Coverage-Precision Curve tau 개별 계산 |
 | **Tier 3 C5** | threshold_policy.json 아티팩트 저장 — Step 6c tau + curve_summary → `models/final/threshold_policy.json` 자동 저장 |
 | **ml_tp_proba 수정** | `predict_with_uncertainty()`에서 TP 클래스 인덱스 동적 탐색 (기존 `proba[:,0]` FP 확률 역전 버그 수정) |
 | Multi-view TF-IDF | raw_text(5000) + shape_text(2000) + path_text(1000) 3-view 구현 완료 |
@@ -96,14 +98,22 @@ TP 클래스(1개, 정탐 파일 출처 자동 부여):
 | PoC 리포트 (레거시) | `scripts/run_poc_report.py` — 학습 후 7-sheet Excel (run_report.py로 대체 권장) |
 | PoC 지표 | `src/evaluation/poc_metrics.py` — binary_stats, coverage_precision_curve, split_comparison |
 | Rule 기여도 | `src/evaluation/rule_analyzer.py` — rule_contribution, class_rule_contribution |
-| Excel 작성기 | `src/report/excel_writer.py` — PocReportData dataclass + PocExcelWriter (9-sheet: 기존 7 + Feature Importance + 데이터 진단) |
+| Excel 작성기 | `src/report/excel_writer.py` — PocReportData dataclass + PocExcelWriter (10-sheet: 기존 7 + Feature Importance + 데이터 진단 + Decision Combiner) |
 | Split 전략 확장 | `src/evaluation/split_strategies.py` — work_month_time_split(), org_subset_split(), server_group_split() |
 | **Split 전략 CLI** | **`build_features(split_strategy="group"\|"temporal"\|"server", test_months=3)`** — `run_training.py --split temporal --test-months 3` |
-| **통합 리포트** | **`scripts/run_report.py`** — eval + PoC + 진단 통합, 9-sheet Excel 생성. `--source label\|detection`, `--include-diagnosis` |
+| **통합 리포트** | **`scripts/run_report.py`** — eval + PoC + 진단 통합, 10-sheet Excel 생성. `--source label\|detection`, `--include-diagnosis` |
 | **데이터 진단** | **`scripts/diagnose_data_bias.py`** — Column 편향 (Cramer's V, MI), Split Robustness, Feature Ablation, Column Risk Registry |
 | **데이터 플로우 분석** | **`docs/data_flow_risk_analysis.md`** — Raw->Feature->Model 전체 추적 + 일반화 성능 관점 분석 |
-| **표준 아티팩트 저장** | **`run_training.py` Step 7+9** — 모든 모델 아티팩트 `models/final/`(FINAL_MODEL_DIR)에 통합 저장: `phase1_label_lgb.joblib`, `best_model_v1.joblib`, `label_encoder.joblib`, `feature_builder.joblib`, `ood_detector.joblib`, `calibrator.joblib`(조건부), `feature_schema.json`, `threshold_policy.json` |
-| **FeatureBuilderSnapshot** | **`src/models/feature_builder_snapshot.py`** — fitted TF-IDF 벡터라이저 + dense 컬럼 통합 저장/로드. `run_inference.py`의 `feature_builder.joblib` 인터페이스 충족. `from_build_result(result)` factory로 생성 |
+| **표준 아티팩트 저장** | **`run_training.py` Step 7+8** — 모든 모델 아티팩트 `models/final/`(FINAL_MODEL_DIR)에 통합 저장: `phase1_label_lgb.joblib`, `best_model_v1.joblib`, `label_encoder.joblib`, `feature_builder.joblib`, `ood_detector.joblib`, `feature_schema.json`, `threshold_policy.json` |
+| **FeatureBuilderSnapshot** | **`src/models/feature_builder_snapshot.py`** — fitted TF-IDF 벡터라이저 + dense 컬럼 + **categorical LabelEncoders** 통합 저장/로드. `transform()`에서 `prepare_phase1_features()` 자동 호출 → 추론 시 피처 동형성 보장 |
+| **공통 피처 준비** | **`src/features/feature_preparer.py`** — `prepare_phase1_features(df)`: meta/path/RuleLabeler 피처 통합 생성. training(run_training.py Step 2-4)과 inference(FeatureBuilderSnapshot.transform) 양쪽에서 동일 함수 호출 |
+| **fp_description 분류 모듈** | **`src/features/fp_classifier.py`** — MULTICLASS_RULES + `classify_fp_description()`. `--use-multiclass` 시 7-class 타깃 생성에 사용 |
+| **Multi-class 학습** | **`run_training.py --use-multiclass`** — fp_description 기반 7-class (TP-실제개인정보 + FP 6-subclass) 학습. 평가 시 binary collapse |
+| **TP 가중치 CLI** | **`run_training.py --tp-weight 1.5`** — TP 샘플 가중치 배수 (기본 1.0=비활성, 필요시 지정) |
+| **Categorical encoding** | **pipeline.py** — train+test 합본 fit LabelEncoder. encoder가 `build_features()` return dict에 포함되어 FeatureBuilderSnapshot으로 전달 |
+| **Calibration** | 제거됨 (CalibratedClassifierCV cv=3 — F1에 영향 없이 학습 시간만 증가하여 삭제) |
+| **Bootstrap CI** | 제거됨 (evaluator.py n=500 — 4M행에서 ±0.0009 수준으로 실용성 없어 삭제) |
+| **file_size** | `column_name_mapping.yaml`에서 `drop: false` — Label 데이터에서 결측이지만 Sumologic/Joined에서 활용 가능 |
 
 정합성 주의:
 
@@ -171,7 +181,7 @@ data/
     silver_joined.parquet     # JOIN 산출물 (label_raw + full_context_raw 통합)
 
 outputs/                              # REPORT_DIR — 텍스트/CSV 리포트
-  poc_report.xlsx                   # ★ 통합 9-sheet Excel (run_report.py --source label)
+  poc_report.xlsx                   # ★ 통합 10-sheet Excel (run_report.py --source label)
   poc_report_detection.xlsx         # ★ Joined 모델 리포트 (run_report.py --source detection)
   classification_report.txt         # sklearn 분류 리포트
   error_analysis.csv                # 오분류 패턴 분석
@@ -246,7 +256,7 @@ python scripts/run_pipeline.py --mode label-only --skip-eval
 
 [판정/출력] S4 Decision combiner → S5 Output writer
 [리포트]  S6 통합 리포트 (run_report.py)
-  → 평가 + Feature Importance + 데이터 진단 → 9-sheet Excel
+  → 평가 + Feature Importance + 데이터 진단 → 10-sheet Excel
 ```
 
 ---
@@ -270,7 +280,7 @@ python scripts/run_training.py --source label --use-filter
 python scripts/run_training.py --source label --use-extended-features
 
 # [S6] 통합 리포트 (학습 완료 후 실행) -- 권장
-python scripts/run_report.py --source label              # Label 모델 9-sheet Excel
+python scripts/run_report.py --source label              # Label 모델 10-sheet Excel
 python scripts/run_report.py --source detection          # Joined 모델 리포트
 python scripts/run_report.py --source label --include-diagnosis  # 데이터 진단 포함
 
@@ -331,7 +341,7 @@ python scripts/run_phase0_validation.py --dry-run
 ### 5.7 통합 리포트 생성 (권장)
 
 ```bash
-# 통합 리포트 (eval + PoC + Feature Importance를 9-sheet Excel로)
+# 통합 리포트 (eval + PoC + Feature Importance를 10-sheet Excel로)
 python scripts/run_report.py --source label              # Label 모델
 python scripts/run_report.py --source detection          # Joined 모델
 python scripts/run_report.py --source label --include-diagnosis  # 데이터 진단 포함

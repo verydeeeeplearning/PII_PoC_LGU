@@ -221,13 +221,12 @@ def extract_server_features(server_name: str) -> dict:
     Returns
     -------
     dict:
-        server_env      str : prd/dev/stg/sbx/test/unknown
+        server_env      str : prd/dev/stg/sbx/test/qa/uat/int/dr/unknown
         server_is_prod  int : 1 if server_env == "prd" else 0
-        server_stack    str : app/mms/db/web/batch/etc
+        server_stack    str : app/mms/db/web/batch/cache/gw/msg/etc
     """
     name = (server_name or "").strip().lower()
 
-    # 환경 토큰 매칭 (첫 번째 매칭 우선)
     server_env = "unknown"
     for env_name, tokens in _ENV_TOKENS:
         if any(tok in name for tok in tokens):
@@ -236,7 +235,6 @@ def extract_server_features(server_name: str) -> dict:
 
     server_is_prod = 1 if server_env == "prd" else 0
 
-    # 스택 토큰 매칭 (첫 번째 매칭 우선)
     server_stack = "etc"
     for stack_name, tokens in _STACK_TOKENS:
         if any(tok in name for tok in tokens):
@@ -361,6 +359,11 @@ def build_meta_features(df: pd.DataFrame) -> pd.DataFrame:
         _server_stack = _server_stack.where(~_mask, _stack_name)
 
     result["server_stack"] = _server_stack
+
+    # ── (5) 파일 크기 피처 ─────────────────────────────────────────────────
+    if "file_size" in result.columns:
+        _fs = pd.to_numeric(result["file_size"], errors="coerce").fillna(0.0)
+        result["file_size_log1p"] = np.log1p(_fs)
 
     return result
 

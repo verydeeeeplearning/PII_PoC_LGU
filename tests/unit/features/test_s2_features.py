@@ -371,7 +371,9 @@ class TestExtractPathFeatures:
 
     def test_all_flag_values_binary(self):
         result = extract_path_features("/var/lib/docker/overlay2/test")
-        binary_keys = [k for k, v in result.items() if k != "path_depth" and k != "extension"]
+        _non_binary = {"path_depth", "extension", "digit_ratio", "max_digit_run",
+                       "separator_count", "parent_dir"}
+        binary_keys = [k for k in result if k not in _non_binary]
         for k in binary_keys:
             assert result[k] in (0, 1), f"{k}={result[k]} is not binary"
 

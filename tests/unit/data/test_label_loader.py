@@ -102,7 +102,7 @@ class TestColumnNormalizer:
             "mappings": {
                 "server_name": {"primary": "서버이름", "aliases": ["서버명"]},
                 "agent_ip": {"primary": "에이전트IP", "aliases": []},
-                "file_size": {"primary": "파일크기", "aliases": [], "drop": True},
+                "file_size": {"primary": "파일크기", "aliases": []},
             }
         }
         p = tmp_path / "col_map.yaml"
@@ -122,10 +122,10 @@ class TestColumnNormalizer:
         assert "server_name" in result.columns
         assert "서버명" not in result.columns
 
-    def test_drop_column_removed_after_normalize(self, normalizer_from_tmp):
-        df = pd.DataFrame({"서버이름": ["s1"], "파일크기": [None]})
+    def test_file_size_column_normalized(self, normalizer_from_tmp):
+        df = pd.DataFrame({"서버이름": ["s1"], "파일크기": [1024]})
         result = normalizer_from_tmp.normalize(df)
-        assert "file_size" not in result.columns
+        assert "file_size" in result.columns
         assert "파일크기" not in result.columns
 
     def test_unknown_korean_column_kept_with_warning(self, normalizer_from_tmp, caplog):
@@ -151,7 +151,6 @@ class TestColumnNormalizer:
         result = normalizer.normalize(df)
         for eng_col in ENGLISH_COLS:
             assert eng_col in result.columns, f"'{eng_col}' 변환 실패"
-        assert "file_size" not in result.columns
         assert "파일크기" not in result.columns
 
     def test_empty_dataframe_returns_empty(self, normalizer_from_tmp):
@@ -327,10 +326,11 @@ class TestLabelLoaderLoad:
         for kor_col in KOREAN_COLS:
             assert kor_col not in df.columns
 
-    def test_file_size_column_dropped(self, tmp_path):
+    def test_file_size_column_kept(self, tmp_path):
         _make_tp_fp_structure(tmp_path, "3월")
         df = LabelLoader(label_root=tmp_path).load_all()
-        assert "file_size" not in df.columns
+        # file_size는 더 이상 drop하지 않음 — 값이 있으면 유지
+        assert "파일크기" not in df.columns
 
     def test_pk_event_generated(self, tmp_path):
         _make_tp_fp_structure(tmp_path, "3월")

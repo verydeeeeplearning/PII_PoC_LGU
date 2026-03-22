@@ -34,23 +34,30 @@ ml_target_mask = (
 | File-level aggregation (선택) | pk_file 단위 통계 | 약 10개 | 파일 수준 맥락 증폭 |
 | **합계 (Phase 2 full)** | | **약 1,055개** | |
 
-> **Phase 1 실제 피처 구성 (Wave 5, ~530개, 실측 538에서 exception_requested 제거):**
+> **Phase 1 실제 피처 구성 (Tier 3 C1+C2, ~538개, F1=0.78):**
 >
 > | 그룹 | 피처 수 | 상세 |
 > |------|--------|------|
 > | TF-IDF fname char | ~200 | file_name char_wb (2,5)-gram |
-> | TF-IDF fname shape | ~100 | file_name → `_to_shape_text()` → char_wb (2,5)-gram [Wave 4 B3] |
+> | TF-IDF fname shape | ~100 | file_name → `_to_shape_text()` → char_wb (2,5)-gram [Tier 2 B3] |
 > | TF-IDF path word | ~200 | file_path → `_to_path_text()` → word (1,2)-gram |
 > | Dense 메타/경로 | ~20 | fname_has_*, pattern_count_*, is_*, has_*, rule_matched |
-> | Dense 서버 의미 | 3 | server_env, server_is_prod, server_stack [Wave 4 B7] |
-> | Dense RULE 세부 | 3 | rule_confidence_lb, rule_id_enc, rule_primary_class_enc [Wave 4 B8] |
-> | Dense file 집계 | 2 | file_event_count, file_pii_diversity [Wave 4 B9] |
-> | Dense 범주형 _enc | 8 | service/ops_dept/organization/retention_period/server_env/stack/rule_id/class [Wave 4 B1] |
+> | Dense 서버 의미 | 3 | server_env(prd/dev/stg/sbx/test/unknown), server_is_prod, server_stack(app/mms/db/web/batch/etc) [Tier 2 B7] |
+> | Dense RULE 세부 | 3 | rule_confidence_lb, rule_id_enc, rule_primary_class_enc [Tier 2 B8] |
+> | Dense file 집계 | 2 | file_event_count, file_pii_diversity (df에 추가, X_train 미주입) [Tier 2 B9] |
+> | Dense 범주형 _enc | 8 | service/ops_dept/organization/retention_period/server_env/stack/rule_id/class [Tier 2 B1, train+test 합본 fit] |
 > | Dense 기타 | ~3 | file_extension_enc, path_depth 등 |
-> | ~~exception_requested~~ | ~~1~~ | ~~Wave 5에서 제거 (Sumologic에 없음)~~ |
-> | **Phase 1 합계** | **~530** | 실측 538 - exception_requested |
+> | ~~exception_requested~~ | ~~1~~ | ~~제거됨 (Sumologic에 없음, 추론 불가)~~ |
+> | **Phase 1 합계** | **~538** | |
 >
-> **Wave 5 C1 Easy FP Suppressor:** ML 학습 전에 고확신 FP를 규칙 기반으로 선제 분리. 4개 조건 (is_system_device, is_package_path+mass, is_docker_overlay, has_license_path). purity≥95% 시 활성화, suppressed 행은 ML에서 제외.
+> **Tier 3 C1 Easy FP Suppressor:** ML 학습 전에 고확신 FP를 규칙 기반으로 선제 분리. 4개 조건 (is_system_device, is_package_path+mass, is_docker_overlay, has_license_path). purity≥95% 시 활성화, suppressed 행은 ML에서 제외.
+>
+> **현재 구조:**
+> - **학습/추론 동형성:** `prepare_phase1_features()` 공통 함수로 training(run_training.py Step 2-4)과 inference(FeatureBuilderSnapshot.transform) 통일
+> - **FeatureBuilderSnapshot:** categorical LabelEncoders 저장, transform() 내부에서 전처리 자동 수행
+> - **Calibration 제거:** CalibratedClassifierCV(cv=3) 삭제 (F1 무관, 학습 시간 절감)
+> - **Bootstrap CI 제거:** evaluator.py n=500 삭제 (4M행에서 실용성 없음)
+> - **TP 가중치:** `--tp-weight` CLI 옵션 (기본 1.0, 필요시 조정)
 
 ```python
 from sklearn.feature_extraction.text import TfidfVectorizer

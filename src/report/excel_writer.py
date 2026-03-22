@@ -95,6 +95,9 @@ class PocReportData:
     split_robustness: pd.DataFrame = field(default_factory=pd.DataFrame)
     ablation_results: pd.DataFrame = field(default_factory=pd.DataFrame)
 
+    # Sheet 10 - Decision Combiner 평가
+    dc_eval_result: dict = field(default_factory=dict)
+
 
 # ── 메인 작성기 ────────────────────────────────────────────────────────────────
 
@@ -132,6 +135,7 @@ class PocExcelWriter:
         self._build_confidence_sheet(wb.create_sheet("7_신뢰도분포"))
         self._build_feature_importance_sheet(wb.create_sheet("8_FeatureImportance"))
         self._build_diagnosis_sheet(wb.create_sheet("9_데이터진단"))
+        self._build_decision_combiner_sheet(wb.create_sheet("10_DecisionCombiner"))
 
         wb.save(str(output_path))
 
@@ -535,6 +539,65 @@ class PocExcelWriter:
             self._write_section_title(ws, row, 1, "Feature Block Ablation")
             row += 1
             row = self._write_table(ws, ablation, row, 1, COLOR_HEADER)
+
+        self._auto_col_width(ws)
+
+    # ── Sheet 10: Decision Combiner ──────────────────────────────────────────
+
+    def _build_decision_combiner_sheet(self, ws) -> None:
+        self._write_section_title(ws, 1, 1, "Decision Combiner 평가 (RULE + ML 결합)")
+
+        dc = self.data.dc_eval_result
+        if not dc:
+            ws.cell(row=3, column=1, value="(Decision Combiner 시뮬레이션 미실행)")
+            return
+
+        row = 3
+
+        # F1 비교
+        self._write_section_title(ws, row, 1, "F1-macro 비교")
+        row += 1
+        kv_rows = [
+            ("ML 단독 F1-macro", f"{dc.get('ml_f1', 0):.4f}"),
+            ("Decision Combiner F1-macro", f"{dc.get('dc_f1', 0):.4f}"),
+            ("차이 (DC − ML)", f"{dc.get('dc_f1', 0) - dc.get('ml_f1', 0):+.4f}"),
+            ("평가 샘플 수", f"{dc.get('total_samples', 0):,}"),
+        ]
+        row = self._write_kv_rows(ws, kv_rows, start_row=row)
+        row += 2
+
+        # 4분면 Confusion Matrix
+        cm_df = dc.get("confusion_matrix")
+        if cm_df is not None and not cm_df.empty:
+            self._write_section_title(ws, row, 1, "4분면 (Confusion Matrix)")
+            row += 1
+            row = self._write_table(ws, cm_df.reset_index().rename(
+                columns={"index": ""}
+            ), row, 1, COLOR_HEADER)
+            row += 2
+
+        # Decision Source 분포
+        src_dist = dc.get("decision_source_dist", {})
+        if src_dist:
+            self._write_section_title(ws, row, 1, "Decision Source 분포")
+            row += 1
+            src_df = pd.DataFrame([
+                {"Source": k, "건수": v, "비율": f"{v / dc.get('total_samples', 1):.1%}"}
+                for k, v in sorted(src_dist.items(), key=lambda x: -x[1])
+            ])
+            row = self._write_table(ws, src_df, row, 1, COLOR_HEADER)
+            row += 2
+
+        # Reason Code 분포
+        reason_dist = dc.get("reason_code_dist", {})
+        if reason_dist:
+            self._write_section_title(ws, row, 1, "Reason Code 분포")
+            row += 1
+            reason_df = pd.DataFrame([
+                {"Reason": k, "건수": v, "비율": f"{v / dc.get('total_samples', 1):.1%}"}
+                for k, v in sorted(reason_dist.items(), key=lambda x: -x[1])
+            ])
+            row = self._write_table(ws, reason_df, row, 1, COLOR_HEADER)
 
         self._auto_col_width(ws)
 

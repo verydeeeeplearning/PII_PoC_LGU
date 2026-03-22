@@ -1,17 +1,16 @@
 {
   "split_strategy": "pk_file_group_split",
   "test_size_target": 0.2,
-  "train_size": 121,
-  "test_size_actual": 31,
-  "train_n_pkfiles": 121,
-  "test_n_pkfiles": 31,
+  "train_size": 64,
+  "test_size_actual": 16,
+  "train_n_pkfiles": 16,
+  "test_n_pkfiles": 4,
   "tfidf_mode": "none",
   "tfidf_views": [
     "phase1_fname",
-    "phase1_fname_shape",
     "phase1_path"
   ],
   "random_seed": 42,
   "use_synthetic_expansion": false,
-  "total_features": 442
+  "total_features": 192
 }

@@ -123,7 +123,7 @@ mappings:
       - "파일 크기"
       - "크기"
       - "FileSize"
-    drop: true  # R열: 100% 결측 → 자동 제거
+    # drop: false — Label 데이터에서 결측 가능하지만, Sumologic/Joined에서 사용
 
   fp_description:
     primary: "오탐: 오탐 설명(검토 후 예외처리 목적)정탐: 삭제조치 OR 삭제불가 사유"

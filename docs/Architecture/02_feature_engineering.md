@@ -90,13 +90,13 @@ Phase 1(label-only)은 `full_context_raw` 텍스트가 없다. `use_phase1_tfidf
 | Phase 1 TF-IDF (fname char + **fname shape** + path word) | file_name, file_path | ~500 | Wave 3: 500→200 축소, **Wave 4: shape 100 추가** |
 | Dense — create_file_path_features | file_path | 8 | |
 | Dense — build_meta_features (시간 피처 제외) | 메타 컬럼 | 8 | Wave 3: 시간 4개 제거 |
-| Dense — extract_path_features (비중복 항목) | file_path | 10 | |
-| Dense — 운영 메타데이터 | rule_matched | 1 | Wave 3 신규. ~~exception_requested~~: Wave 5에서 제거 (Sumologic에 없음) |
-| **Dense — 서버 의미 토큰** | server_name | **3** | **Wave 4 B7: server_env, server_is_prod, server_stack** |
-| **Dense — RULE 세부 신호** | RuleLabeler | **3** | **Wave 4 B8: rule_confidence_lb + rule_id_enc + rule_primary_class_enc** |
-| **Dense — file-level aggregation** | pk_file 집계 | **2** | **Wave 4 B9: file_event_count, file_pii_diversity (train fold only)** |
-| **Dense — 범주형 Label Encoding** | 메타 컬럼 | **8** | **Wave 4 B1: service/ops_dept/organization/retention_period/server_env/server_stack/rule_id/rule_primary_class → _enc** |
-| **합계 (중복 제거 후)** | | **~538 (실측)** | exception_requested 제거 후 ~530 예상 |
+| Dense — extract_path_features (비중복 항목) | file_path | **10** | is_log_file, is_docker_overlay, has_license_path, is_temp_or_dev, is_system_device, is_package_path, has_cron_path, has_date_in_path, has_business_token, has_system_token |
+| Dense — 운영 메타데이터 | rule_matched | 1 | ~~exception_requested~~: 제거 (Sumologic에 없음, 추론 불가) |
+| **Dense — 서버 의미 토큰** | server_name | **3** | **Tier 2 B7: server_env(prd/dev/stg/sbx/test/unknown), server_is_prod, server_stack(app/mms/db/web/batch/etc)** |
+| **Dense — RULE 세부 신호** | RuleLabeler | **3** | **Tier 2 B8: rule_confidence_lb + rule_id_enc + rule_primary_class_enc** |
+| **Dense — file-level aggregation** | pk_file 집계 | **2** | **Tier 2 B9: file_event_count, file_pii_diversity (df에 추가, X_train 미주입)** |
+| **Dense — 범주형 Label Encoding** | 메타 컬럼 | **8** | **Tier 2 B1: train+test 합본 fit. encoder가 FeatureBuilderSnapshot에 포함** |
+| **합계 (중복 제거 후)** | | **~538 (실측)** | Tier 3 C1+C2: exception_requested 제거, F1=0.78 |
 
 > **Wave 3 피처 개정 (2026-03-20):** 10M행 실데이터 학습 결과(F1-macro=0.6146) 진단 후, 과적합/누수 피처를 정리하고 강신호 피처를 추가. 상세: `outputs/diagnosis/model_performance_report.md`
 >
@@ -114,9 +114,9 @@ Phase 1(label-only)은 `full_context_raw` 텍스트가 없다. `use_phase1_tfidf
 >
 > **B2 중복 샘플 가중치:** `(file_path, file_name)` 그룹별 `sample_weight = 1/sqrt(group_size)`, mean=1 정규화. 10M행에서 동일 파일 반복 행의 모델 편향 방지. `train_lightgbm(sample_weight=)` 파라미터 추가, early stopping 내부 split 시에도 가중치 동시 분할.
 >
-> **B7 서버 의미 토큰 (server_freq 대체):** `build_meta_features()`에서 `server_name` → `server_env`(prd/dev/stg/sbx/test/unknown), `server_is_prod`(0/1), `server_stack`(app/mms/db/web/batch/etc) 추출. server_freq는 train 통계 누수였으나, server_env는 서버 역할/환경의 도메인 신호. 샘플에서 prd=TP, dev/stg/sbx=FP 완전 분리 확인.
+> **B7 서버 의미 토큰 (server_freq 대체):** `build_meta_features()`에서 `server_name` → `server_env`(prd/dev/stg/sbx/test/unknown), `server_is_prod`(0/1), `server_stack`(app/mms/db/web/batch/etc) 추출.
 >
-> **B1 범주형 Label Encoding:** `service`, `ops_dept`, `organization`, `retention_period`, `server_env`, `server_stack`, `rule_id`, `rule_primary_class` → `_enc` 접미사 정수 변환. train+test 합쳐서 fit (unseen 방지), `__MISSING__` placeholder.
+> **B1 범주형 Label Encoding:** `service`, `ops_dept`, `organization`, `retention_period`, `server_env`, `server_stack`, `rule_id`, `rule_primary_class` → `_enc` 접미사 정수 변환. train+test 합본 fit. encoder가 `build_features()` 반환 dict에 포함되어 `FeatureBuilderSnapshot`으로 전달 → 추론 시 동일 encoding 재현.
 >
 > **B8 RULE 세부 신호:** `rule_matched` binary 1bit에서 확장. `rule_id_enc` (12개 룰 구분), `rule_primary_class_enc` (FP 클래스 방향), `rule_confidence_lb` (Bayesian 하한 수치). Step 4에서 기존 버려지던 `rule_confidence_lb` 컬럼 복원.
 >
@@ -133,10 +133,18 @@ Phase 1(label-only)은 `full_context_raw` 텍스트가 없다. `use_phase1_tfidf
 > **C2 Slice-aware threshold:** server_env별 Coverage-Precision Curve tau를 개별 계산. `threshold_policy.json`에 `slice_thresholds` 딕셔너리로 저장. 운영 시 서버 환경별 차등 tau 적용 가능.
 >
 > **run_report.py 체크포인트 방식으로 전환:** 피처 재생성/split 재실행 제거. `step5_features_*.pkl` + `step6_model_*.pkl`에서 X_test/y_test_enc/model/le를 직접 로드하여 training과 100% 동일한 평가. `threshold_policy.json` 우선 로드.
+
+#### 학습/추론 동형성 개선
+
+> **공통 피처 준비 함수 (`feature_preparer.py`):** `run_training.py` Steps 2-4의 공통 로직 (build_meta_features + extract_path_features + RuleLabeler)을 `prepare_phase1_features(df)` 단일 함수로 추출. training과 inference(FeatureBuilderSnapshot.transform 내부)가 동일 함수를 호출하여 피처 동형성을 보장.
 >
-> **diagnose_data_bias.py 독립 학습 제거:** `diagnose_split_robustness()`에서 독립 LGBMClassifier 학습 제거. 체크포인트 모델만 사용.
+> **FeatureBuilderSnapshot:** `categorical_encoders` (LabelEncoder) 딕셔너리 저장. `transform()` 내부에서 `prepare_phase1_features()` 자동 호출 + 저장된 encoder로 categorical encoding 수행. 추론 시 Importance Top 5 피처(service_enc 등)가 NaN이 되던 문제 해결.
+>
+> **`run_inference.py`:** `MLFeatureBuilder` → `FeatureBuilderSnapshot` 전환. transform() 내부에서 전처리 자동 수행.
 >
 > **B3 Shape TF-IDF:** file_name에 `_to_shape_text()` 변환 후 char_wb n-gram TF-IDF 100 features 추가. 숫자 n-gram 과적합 감소: `02506` → `DDDDD` 패턴 학습으로 OOV 파일명 내성 증가.
+>
+> **제거된 항목:** CalibratedClassifierCV(cv=3) — F1 무관, 학습 시간만 증가. Bootstrap CI(n=500) — 4M행에서 ±0.0009 수준으로 실용성 없음.
 >
 > **B6 LightGBM 정규화 강화:** `min_child_samples: 20→200` (리프당 최소 샘플 수 증가), `reg_alpha: 0→0.5` (L1 정규화, 노이즈 피처 억제), `max_depth: -1→10` (트리 깊이 제한).
 >

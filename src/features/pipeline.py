@@ -495,17 +495,19 @@ def build_features(
             "rule_confidence_lb",
             # [Tier 2 B9] file-level aggregation (compute_file_aggregates_label)
             "file_event_count", "file_pii_diversity",
+            # 파일 크기
+            "file_size_log1p",
         ]
 
         # [Tier 2 B1+B7+B8] 범주형 피처 — Label Encoding으로 정수 변환
-        # exception_requested만 Sumologic에 없음 → 제거. 나머지는 사용 가능 확인됨.
         _CATEGORICAL_COLS = [
-            "service", "ops_dept", "organization", "retention_period",  # B1: Sumologic 사용 가능
-            "server_env", "server_stack",       # B7: 서버 의미 토큰 (Sumologic server_name에서 파생)
-            "rule_id", "rule_primary_class",    # B8: RULE 세부 신호 (추론 시 RuleLabeler 실행)
+            "service", "ops_dept", "organization", "retention_period",  # B1
+            "server_env", "server_stack",       # B7
+            "rule_id", "rule_primary_class",    # B8
         ]
         _cat_cols_present = [c for c in _CATEGORICAL_COLS
                             if c in df_train.columns and c in df_test.columns]
+        _categorical_encoders = {}
         if _cat_cols_present:
             from sklearn.preprocessing import LabelEncoder as _LE
             for _cc in _cat_cols_present:
@@ -523,6 +525,7 @@ def build_features(
                     df_test[_cc].fillna("__MISSING__").astype(str)
                 )
                 _PRECOMPUTED_DENSE_COLS.append(_cc + "_enc")
+                _categorical_encoders[_cc] = _le_cat
             print(f"  [Tier 2 B1/B7/B8] 범주형 Label Encoding: {_cat_cols_present}")
 
         _pc_train = df_train.reindex(
@@ -631,6 +634,12 @@ def build_features(
         "total_features": int(X_train.shape[1]),
     }
 
+    # categorical_encoders가 정의되지 않은 경우 (non-dense 경로)
+    try:
+        _categorical_encoders
+    except NameError:
+        _categorical_encoders = {}
+
     return {
         "X_train": X_train,
         "X_test":  X_test,
@@ -643,6 +652,7 @@ def build_features(
         "df_train": df_train,
         "df_test":  df_test,
         "split_meta": split_meta,
+        "categorical_encoders": _categorical_encoders,
     }
 
 

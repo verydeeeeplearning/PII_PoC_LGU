@@ -53,44 +53,8 @@ def _make_silver_df(n: int = 30):
 
 
 # ── Test 7.1: S1 → S2 Feature Engineering ────────────────────────────────────
-
-@pytest.mark.integration
-class TestS1ToS2Integration:
-
-    def test_feature_builder_produces_sparse_matrix(self):
-        """Test 7.1: Silver DF → MLFeatureBuilder → sparse matrix."""
-        from src.models.feature_builder import MLFeatureBuilder
-
-        df = _make_silver_df(30)
-        builder = MLFeatureBuilder(
-            manual_feature_cols=["has_byte_kw", "has_domain_kw", "is_log_file"],
-            tfidf_config={
-                "raw_word": {"max_features": 50, "min_df": 1},
-                "raw_char": {"max_features": 30, "min_df": 1},
-                "shape_char": {"max_features": 30, "min_df": 1},
-                "path_word": {"max_features": 20, "min_df": 1},
-            },
-        )
-        X = builder.fit_transform(df)
-        assert X.shape[0] == len(df)
-        assert X.shape[1] > 0
-
-    def test_feature_builder_transform_matches_fit_transform(self):
-        """transform() 차원이 fit_transform()과 동일."""
-        from src.models.feature_builder import MLFeatureBuilder
-
-        df = _make_silver_df(30)
-        builder = MLFeatureBuilder(
-            tfidf_config={
-                "raw_word":  {"max_features": 20, "min_df": 1},
-                "raw_char":  {"max_features": 10, "min_df": 1},
-                "shape_char":{"max_features": 10, "min_df": 1},
-                "path_word": {"max_features": 10, "min_df": 1},
-            },
-        )
-        X_train = builder.fit_transform(df[:20])
-        X_test = builder.transform(df[20:])
-        assert X_train.shape[1] == X_test.shape[1]
+# Wave 6: MLFeatureBuilder 삭제됨 → FeatureBuilderSnapshot으로 대체
+# 관련 테스트는 tests/test_feature_parity.py로 이동
 
 
 # ── Test 7.2: S3a → S4 Rule → Decision ───────────────────────────────────────

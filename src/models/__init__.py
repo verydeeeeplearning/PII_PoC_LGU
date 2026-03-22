@@ -5,7 +5,7 @@
                           save_model_with_meta, load_model_with_meta
 
 S3b 신규 모듈:
-    feature_builder.py  : MLFeatureBuilder (TF-IDF 4채널 + 수동 피처)
+    feature_builder_snapshot.py : FeatureBuilderSnapshot (TF-IDF + dense + categorical encoders 통합)
     calibrator.py       : ClasswiseCalibrator (Platt/Isotonic 차등 보정)
     ood_detector.py     : OODDetector (Mahalanobis Distance OOD 탐지)
     evidence_generator.py: generate_lightweight_evidence / generate_shap_evidence

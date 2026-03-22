@@ -121,7 +121,7 @@ def run_inference(args):
 
         if model_path.exists():
             from src.models.trainer import load_model_with_meta, predict_with_uncertainty
-            from src.models.feature_builder import MLFeatureBuilder
+            from src.models.feature_builder_snapshot import FeatureBuilderSnapshot
             import joblib
 
             meta = load_model_with_meta(str(model_path))
@@ -131,7 +131,7 @@ def run_inference(args):
             # 피처 빌더 로드 (모델과 동일 디렉토리에서)
             fb_path = model_path.parent / "feature_builder.joblib"
             if fb_path.exists():
-                builder = MLFeatureBuilder.load(str(fb_path))
+                builder = FeatureBuilderSnapshot.load(str(fb_path))
                 X = builder.transform(df_silver)
                 pk_events = df_silver["pk_event"].tolist() if "pk_event" in df_silver.columns else None
                 ml_predictions_df = predict_with_uncertainty(model, X, pk_events=pk_events)

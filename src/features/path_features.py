@@ -50,6 +50,26 @@ _CRON_PATH_TOKENS = [
     "/var/log/anacron",
 ]
 
+# 백업/아카이브 경로 토큰 -> FP-시스템로그 방향 신호
+_BACKUP_TOKENS = [
+    "/backup/", "/backups/", "/archive/", "/archives/",
+    "/snapshot/", "/snapshots/", ".bak/", "/vault/",
+]
+
+# 데이터베이스 관련 경로 토큰 -> FP 방향 신호
+_DATABASE_TOKENS = [
+    "/mysql/", "/postgres/", "/oracle/", "/mariadb/",
+    "/mongodb/", "/cassandra/", "/redis/", "/data/db/",
+    "tablespace", "/var/lib/mysql", "/var/lib/pgsql",
+]
+
+# CI/CD 파이프라인 경로 토큰 -> FP 방향 신호
+_CICD_TOKENS = [
+    "/jenkins/", "/gitlab-runner/", "github-actions",
+    "/ci/", "/cd/", "/.circleci/", "/buildkite/",
+    "/artifactory/", "/nexus/",
+]
+
 # 로그 파일 확장자
 _LOG_EXTENSIONS_PATH = {".log", ".gz", ".bz2"}
 
@@ -157,6 +177,37 @@ def extract_path_features(file_path: Optional[str]) -> dict:
 
         "has_system_token": int(
             any(t in fp for t in _SYSTEM_TOKENS)
+        ),
+
+        # 신규: 백업/아카이브 경로
+        "has_backup_path": int(
+            any(t in fp for t in _BACKUP_TOKENS)
+        ),
+
+        # 신규: 데이터베이스 경로
+        "has_database_path": int(
+            any(t in fp for t in _DATABASE_TOKENS)
+        ),
+
+        # 신규: CI/CD 파이프라인 경로
+        "has_cicd_path": int(
+            any(t in fp for t in _CICD_TOKENS)
+        ),
+
+        # [Wave 7] 구조 신호 dense 피처
+        # 파일명 내 숫자 비율 (0.0~1.0)
+        "digit_ratio": (
+            sum(c.isdigit() for c in fname) / max(len(fname), 1)
+        ),
+        # 가장 긴 연속 숫자 길이 (예: "log20240315.csv" → 8)
+        "max_digit_run": (
+            max((len(m) for m in re.findall(r"\d+", fname)), default=0)
+        ),
+        # 구분자(._-) 개수
+        "separator_count": sum(c in "._-" for c in fname),
+        # 직접 상위 디렉토리명 (categorical — pipeline.py에서 Target Encoding)
+        "parent_dir": (
+            fp.rsplit("/", 2)[-2] if fp.count("/") >= 2 else "__root__"
         ),
     }
 

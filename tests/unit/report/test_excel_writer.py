@@ -142,7 +142,7 @@ def _make_full_data():
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPocExcelWriter:
-    def test_seven_sheets_created(self):
+    def test_ten_sheets_created(self):
         from src.report.excel_writer import PocExcelWriter
 
         data = _make_full_data()
@@ -153,7 +153,7 @@ class TestPocExcelWriter:
             PocExcelWriter(data).write(out_path)
             from openpyxl import load_workbook
             wb = load_workbook(str(out_path))
-            assert len(wb.sheetnames) == 7
+            assert len(wb.sheetnames) == 10
         finally:
             out_path.unlink(missing_ok=True)
 
@@ -170,7 +170,7 @@ class TestPocExcelWriter:
             xls = pd.ExcelFile(str(out_path))
             sheet_count = len(xls.sheet_names)
             xls.close()  # Windows: 파일 핸들 해제 후 삭제
-            assert sheet_count == 7
+            assert sheet_count == 10
         finally:
             out_path.unlink(missing_ok=True)
 

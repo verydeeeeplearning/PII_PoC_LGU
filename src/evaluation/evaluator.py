@@ -86,14 +86,6 @@ def full_evaluation(
         except Exception:
             pass
 
-    # §6.4 Bootstrap CI for F1-macro
-    f1_mean, f1_lo, f1_hi = bootstrap_metric(
-        y_true, y_pred,
-        lambda yt, yp: f1_score(yt, yp, average="macro", zero_division=0),
-        n_bootstrap=500,
-    )
-    print(f"  F1-macro CI: {f1_mean:.4f} ({f1_lo:.4f}~{f1_hi:.4f}, 95% CI, n=500)")
-
     # Classification Report
     report_str = classification_report(y_true, y_pred, target_names=class_names)
     report_dict = classification_report(y_true, y_pred, target_names=class_names, output_dict=True)
@@ -125,7 +117,6 @@ def full_evaluation(
         "confusion_matrix": cm,
         "poc_criteria": poc_criteria,
         "pr_auc": pr_auc,
-        "f1_macro_ci": (f1_lo, f1_hi),
     }
 
 
@@ -299,7 +290,7 @@ def analyze_errors(
     class_names: List[str],
     text_column: str = "detected_text_with_context",
     top_n: int = 15,
-    save_path: str = "outputs/error_analysis.csv",
+    save_path: str = "outputs/error_analysis.csv",   # run_report.py에서 REPORT_DIR 기준으로 오버라이드
 ) -> pd.DataFrame:
     """
     오분류 패턴 분석
@@ -354,8 +345,8 @@ def feature_importance_analysis(
     model,
     feature_names: List[str],
     top_n: int = TOP_N_FEATURES,
-    save_path: str = "outputs/figures/feature_importance.png",
-    report_path: str = "outputs/feature_importance.csv",
+    save_path: str = "outputs/figures/feature_importance.png",   # run_report.py에서 FIGURES_DIR 기준으로 오버라이드
+    report_path: str = "outputs/feature_importance.csv",       # run_report.py에서 REPORT_DIR 기준으로 오버라이드
 ) -> pd.DataFrame:
     """
     Feature Importance 분석

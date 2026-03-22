@@ -873,7 +873,7 @@ Step 7:  핵심 지표 (F1, PoC 판정, Coverage-Precision)
 Step 7b: eval 고유 산출물 (confusion_matrix.png, feature_importance.csv/png, error_analysis.csv)
 Step 8:  Secondary / Tertiary Split 성능 계산
 Step 9:  데이터 진단 (--include-diagnosis 시: Column Registry, Split Robustness, Ablation)
-Step 10: PocExcelWriter → 9-sheet Excel + 개별 산출물
+Step 10: PocExcelWriter → 10-sheet Excel + 개별 산출물 (Sheet 10: Decision Combiner RULE+ML 통합 평가)
 ```
 
 **source별 모델/데이터 경로:**

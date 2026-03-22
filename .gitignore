@@ -46,3 +46,4 @@ offline_packages/
 # Temp
 *.tar
 image*.png
+.serena/

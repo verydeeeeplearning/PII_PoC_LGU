@@ -54,59 +54,8 @@ def _make_df(n: int = 30, seed: int = 42) -> pd.DataFrame:
 
 
 # ── Phase 4.1: MLFeatureBuilder fit_transform ────────────────────────────
-
-class TestMLFeatureBuilder:
-
-    @pytest.fixture
-    def builder(self):
-        from src.models.feature_builder import MLFeatureBuilder
-        return MLFeatureBuilder(
-            manual_feature_cols=MANUAL_COLS,
-            tfidf_config=_TFIDF_CFG,
-        )
-
-    @pytest.fixture
-    def df(self):
-        return _make_df()
-
-    def test_fit_transform_returns_sparse(self, builder, df):
-        """Test 4.1: fit_transform → sparse matrix"""
-        X = builder.fit_transform(df)
-        assert sp.issparse(X), "출력이 sparse matrix여야 함"
-        assert X.shape[0] == len(df)
-
-    def test_feature_count_reasonable(self, builder, df):
-        """Test 4.1b: feature 수가 합리적 범위"""
-        X = builder.fit_transform(df)
-        assert X.shape[1] >= 50, f"피처 수 부족: {X.shape[1]}"
-
-    def test_transform_new_data(self, builder, df):
-        """Test 4.8: transform(새 데이터) — 에러 없음, 차원 일치"""
-        builder.fit_transform(df)
-        df_new = _make_df(n=5, seed=99)
-        X_new = builder.transform(df_new)
-        assert sp.issparse(X_new)
-        assert X_new.shape[1] == builder.n_features_
-
-    def test_feature_names_attribute(self, builder, df):
-        """Test 4.2a: feature_names 속성이 생성됨"""
-        builder.fit_transform(df)
-        assert hasattr(builder, "feature_names_")
-        assert len(builder.feature_names_) == builder.n_features_
-
-    def test_transform_without_fit_raises(self):
-        """미 학습 상태에서 transform → RuntimeError"""
-        from src.models.feature_builder import MLFeatureBuilder
-        builder = MLFeatureBuilder(manual_feature_cols=MANUAL_COLS)
-        with pytest.raises(RuntimeError):
-            builder.transform(_make_df(n=5))
-
-    def test_missing_manual_col_handled(self, builder, df):
-        """수동 피처 컬럼 일부 누락 → 0으로 채움 (에러 없음)"""
-        builder.fit_transform(df)
-        df_missing = df.drop(columns=["has_byte_kw"])
-        X = builder.transform(df_missing)
-        assert X.shape[1] == builder.n_features_
+# Wave 6: MLFeatureBuilder 삭제됨 → FeatureBuilderSnapshot으로 대체
+# 관련 테스트는 tests/test_feature_parity.py로 이동
 
 
 # ── Phase 4.3: ClasswiseCalibrator ───────────────────────────────────────
