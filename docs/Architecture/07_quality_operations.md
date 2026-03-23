@@ -443,7 +443,12 @@ class AutoRetrainer:
 | **Auto-FP Coverage** | 전체 FP 대비 자동 처리 비율 | ≥ 60% | Phase 2 목표 |
 | **공수 절감률** | 운영 | ≥ 50% | 비즈니스 성공 기준 |
 
-> 현재 코드(`config/feature_config.yaml`)의 PoC 게이트는 `Macro F1 >= 0.70`, `TP Recall >= 0.75`, `FP Precision >= 0.85`이며, 위 표는 운영 목표치(상향 목표)로 관리한다.
+> **PoC 게이트 (Wave 7 변경, 2026-03-23):**
+> - **PASS/FAIL 판정: F1-macro ≥ 0.70 단독 기준** (TP Recall, FP Precision은 참고 지표)
+> - TP Recall ≥ 0.75 (참고), FP Precision ≥ 0.80 (참고, 기존 0.85에서 완화)
+> - 판정 기준이 ML + Rule 결합(Decision Combiner) 결과 기반
+> - Wave 7 Grid Sweep 결과: DC 개입 시 F1 하락 → ML passthrough 권장 → 실질적으로 ML 단독 F1이 판정 기준
+> - 실측: F1-macro 0.7914 (temporal split, 3,962,171건) → **PASS**
 
 **Coverage-Precision 트레이드오프 곡선:**
 

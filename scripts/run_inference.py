@@ -149,7 +149,28 @@ def run_inference(args):
             print("  [SKIP] S3a 또는 S3b 결과 없음")
         else:
             from src.models.decision_combiner import combine_decisions
+            import json as _json_inf
             import pandas as pd
+
+            # threshold_policy.json 로드 (있으면 임계값 오버라이드)
+            _tp_path = FINAL_MODEL_DIR / "threshold_policy.json"
+            _loaded_thresholds = None
+            if _tp_path.exists():
+                try:
+                    with open(_tp_path, encoding="utf-8") as _f:
+                        _tp_data = _json_inf.load(_f)
+                    _loaded_thresholds = {}
+                    if _tp_data.get("recommended_fp_tau") is not None:
+                        _loaded_thresholds["ml_conf"] = float(
+                            _tp_data["recommended_fp_tau"]
+                        )
+                    print(f"  threshold_policy.json 로드: {_tp_path.name}")
+                    if _loaded_thresholds:
+                        print(f"  오버라이드 임계값: {_loaded_thresholds}")
+                    else:
+                        _loaded_thresholds = None
+                except Exception as _e:
+                    print(f"  [경고] threshold_policy.json 로드 실패: {_e}")
 
             decisions = []
             for i, rule_row in rule_labels_df.iterrows():
@@ -159,7 +180,9 @@ def run_inference(args):
                     if "pk_event" in ml_predictions_df.columns
                     else ml_predictions_df.iloc[i].to_dict()
                 )
-                dec = combine_decisions(rule_row.to_dict(), ml_row)
+                dec = combine_decisions(
+                    rule_row.to_dict(), ml_row, thresholds=_loaded_thresholds,
+                )
                 dec["pk_event"] = rule_row.get("pk_event", f"evt_{i}")
                 dec["pk_file"] = df_silver.iloc[i].get("pk_file", "") if i < len(df_silver) else ""
                 decisions.append(dec)

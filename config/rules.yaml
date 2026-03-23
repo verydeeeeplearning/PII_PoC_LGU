@@ -265,7 +265,10 @@ rules:
     active: true
 
   # Hadoop/빅데이터 시스템 경로 (L2_HADOOP_PATH_001 대체)
-  # 리스크: 낮음 — 빅데이터 인프라 경로에 마스킹 대상 실제 PII 가능성 낮음
+  # ⚠️ 비활성화 (2026-03-22): 실측 precision=11.7% (13,102건 중 1,534건만 정답)
+  #   rule_stats.json lb=0.845 vs 실측 0.117 — 7배 괴리.
+  #   조건(has_system_token + is_log_file)이 너무 광범위하여 비-Hadoop 로그까지 매칭.
+  #   rule_stats 자동 갱신 체계 구축 후 조건 강화하여 재활성화 검토.
   - rule_id: "PATH_HADOOP_001"
     applies_to_pii_type: "any"
     primary_class: "FP-시스템로그"
@@ -277,7 +280,7 @@ rules:
     logic: "and"
     priority: 84
     evidence_template: "Hadoop/빅데이터 시스템 경로: has_system_token=1, is_log_file=1"
-    active: true
+    active: false
 
   # 크론/배치 로그 경로
   # 리스크: 중간 — 배치 스크립트 자체에 개인정보가 있을 수 있음

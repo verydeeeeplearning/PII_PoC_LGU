@@ -417,6 +417,57 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         else:
             print(f"  [체크포인트 이미 존재 - 저장 생략] {_ckpt4.name}")
 
+    # ── Step 4a: rule_stats.json 자동 집계 ──
+    if (
+        "rule_matched" in df.columns
+        and "rule_id" in df.columns
+        and "rule_primary_class" in df.columns
+        and "label_binary" in df.columns
+    ):
+        print("\n[Step 4a] rule_stats.json 자동 집계")
+        _rule_matched_mask = df["rule_matched"].astype(bool)
+        _rule_hits = df[_rule_matched_mask]
+        if len(_rule_hits) > 0:
+            from scipy.stats import beta as _beta_dist
+            import json as _json_rs
+
+            _new_stats = {}
+            for _rid, _grp in _rule_hits.groupby("rule_id"):
+                _N = len(_grp)
+                _rule_cls = _grp["rule_primary_class"].iloc[0]
+                # M = 룰이 예측한 클래스와 실제 라벨이 일치하는 건수
+                # label_binary는 "TP"/"FP" 형태, rule_primary_class는 "FP-*" 형태
+                _is_fp_rule = "FP" in str(_rule_cls)
+                if _is_fp_rule:
+                    _M = int((_grp["label_binary"] == "FP").sum())
+                else:
+                    _M = int((_grp["label_binary"] == "TP").sum())
+                _lb = float(_beta_dist.ppf(0.05, _M + 1, _N - _M + 1))
+                _new_stats[str(_rid)] = {"N": _N, "M": _M, "precision_lb": round(_lb, 6)}
+
+            # 기존 rule_stats 로드 및 비교
+            if rule_stats_path.exists():
+                with open(rule_stats_path, encoding="utf-8") as _f:
+                    _old_stats = _json_rs.load(_f)
+            else:
+                _old_stats = {}
+
+            _updated = {**_old_stats}
+            for _rid, _ns in _new_stats.items():
+                _old_lb = _old_stats.get(_rid, {}).get("precision_lb", 0.5)
+                _diff = abs(_ns["precision_lb"] - _old_lb)
+                _marker = " ⚠️ 큰 편차!" if _diff > 0.2 else ""
+                print(f"  {_rid}: N={_ns['N']:,}, M={_ns['M']:,}, "
+                      f"lb={_ns['precision_lb']:.3f} (이전: {_old_lb:.3f}){_marker}")
+                _updated[_rid] = _ns
+
+            # 저장
+            with open(rule_stats_path, "w", encoding="utf-8") as _f:
+                _json_rs.dump(_updated, _f, ensure_ascii=False, indent=2)
+            print(f"  rule_stats.json 갱신 완료: {rule_stats_path}")
+        else:
+            print("  룰 매칭 건 없음 — rule_stats 갱신 생략")
+
     # ── 피처 전처리: 문자열 → 숫자 변환 ──
     if "exception_requested" in df.columns:
         df["exception_requested"] = (df["exception_requested"].astype(str).str.upper() == "Y").astype(int)
@@ -658,6 +709,20 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         else:
             print(f"  [체크포인트 이미 존재 - 저장 생략] {_ckpt6.name}")
 
+    # ── Train / Test 성능 비교 ──
+    from sklearn.metrics import f1_score as _f1_cmp_fn, classification_report as _cr_cmp_fn
+    _train_pred = model.predict(X_train)
+    _train_f1 = float(_f1_cmp_fn(y_train_enc, _train_pred, average="macro", zero_division=0))
+    _train_report = _cr_cmp_fn(y_train_enc, _train_pred, target_names=le.classes_, zero_division=0)
+    _test_pred = model.predict(X_test)
+    _test_report = _cr_cmp_fn(y_test_enc, _test_pred, target_names=le.classes_, zero_division=0)
+    _gap = _train_f1 - f1
+    print(f"\n[Train set] F1-macro: {_train_f1:.4f}")
+    print(_train_report)
+    print(f"[Test set] F1-macro: {f1:.4f}")
+    print(_test_report)
+    print(f"[Gap] Train - Test: {_gap:+.4f}")
+
     # ── [Tier 3 C1] 합산 평가: Suppressed FP + ML Residual ──
     if _suppressed_test_count > 0:
         from sklearn.metrics import f1_score as _f1_fn, classification_report as _cr_fn
@@ -785,6 +850,143 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
         print(f"  [Tier 3 C5] threshold_policy.json 저장: {_tp_path}")
     except Exception as _e:
         print(f"  [경고] Coverage-Precision Curve 계산 실패: {_e}")
+
+    # ── Step 6d: Decision Combiner 임계값 Grid Sweep ──
+    print(f"\n[Step 6d] Decision Combiner 임계값 Grid Sweep (ML + Rule)")
+    try:
+        from src.models.decision_combiner import _DEFAULT_THRESHOLDS
+        from src.models.trainer import predict_with_uncertainty
+        from sklearn.metrics import f1_score as _dc_f1_fn, classification_report as _dc_cr_fn
+        from src.evaluation.evaluator import (
+            POC_F1_MACRO_THRESHOLD, POC_TP_RECALL_THRESHOLD, POC_FP_PRECISION_THRESHOLD,
+        )
+
+        _ml_pred_df = predict_with_uncertainty(
+            model, X_test,
+            pk_events=None,
+            label_names=list(le.classes_),
+        )
+
+        _n_dc = X_test.shape[0]
+        _rule_matched_dc = df["rule_matched"].values[-_n_dc:] if "rule_matched" in df.columns else _np.zeros(_n_dc, dtype=bool)
+        _rule_conf_dc = df["rule_confidence_lb"].values[-_n_dc:] if "rule_confidence_lb" in df.columns else _np.zeros(_n_dc)
+        _rule_class_dc = df["rule_primary_class"].values[-_n_dc:] if "rule_primary_class" in df.columns else _np.full(_n_dc, "")
+
+        _ml_class_dc = _ml_pred_df["ml_top1_class_name"].values
+        _ml_tp_proba_dc = _ml_pred_df["ml_tp_proba"].values
+        _ml_top1_proba_dc = _ml_pred_df["ml_top1_proba"].values
+        _ml_margin_dc = _ml_pred_df["ml_margin"].values
+
+        _rule_hit_dc = _np.array(_rule_matched_dc, dtype=bool)
+        _rule_conf_arr_dc = _np.array(_rule_conf_dc, dtype=float)
+        _is_fp_dc = _np.array(["FP" in str(c) for c in _rule_class_dc])
+        _ml_class_bin = _np.array(["TP" if "TP" in str(c) else "FP" for c in _ml_class_dc])
+
+        # 정답 (binary)
+        _dc_true_base = _np.array(["TP" if "TP" in str(c) else "FP" for c in le.inverse_transform(y_test_enc)])
+        # Suppressed FP 합산용
+        if _suppressed_test_count > 0:
+            _supp_true = _np.array(["TP" if "TP" in str(c) else "FP" for c in _suppressed_test_y])
+            _dc_true_all = _np.concatenate([_dc_true_base, _supp_true])
+        else:
+            _dc_true_all = _dc_true_base
+
+        # ── Grid Sweep 함수 ──
+        def _eval_dc_thresholds(_mc, _mm, _tp_amb, _tp_ov, _rule_cf):
+            """주어진 임계값으로 DC 판정 후 F1/TP Recall/FP Precision 반환."""
+            _pred = _ml_class_bin.copy()  # 기본값: ML 예측 그대로 (TP fallback 아님)
+
+            # Case 1: RULE 고확신
+            _c1 = _rule_hit_dc & (_rule_conf_arr_dc >= _rule_cf)
+            _rule_cls_bin = _np.array(["TP" if "TP" in str(c) else "FP" for c in _rule_class_dc])
+            _pred[_c1] = _rule_cls_bin[_c1]
+            # Case 1 TP override
+            _tp_ov_mask = _c1 & _is_fp_dc & (_ml_tp_proba_dc >= _tp_ov)
+            _pred[_tp_ov_mask] = "TP"
+
+            # Case 2: RULE 미매칭 영역
+            _rem = ~_c1
+            # ML 고확신 → ML 결과 유지 (이미 기본값)
+            # ML 저확신 + TP 신호 → TP override
+            _low_conf = _rem & ((_ml_top1_proba_dc < _mc) | (_ml_margin_dc < _mm))
+            _amb_tp = _low_conf & (_ml_tp_proba_dc >= _tp_amb)
+            _pred[_amb_tp] = "TP"
+
+            # Suppressed FP 합산
+            if _suppressed_test_count > 0:
+                _pred = _np.concatenate([_pred, _np.full(_suppressed_test_count, "FP")])
+
+            _f1 = float(_dc_f1_fn(_dc_true_all, _pred, average="macro", zero_division=0))
+            _tp_m = _dc_true_all == "TP"
+            _tp_r = float((_pred[_tp_m] == "TP").mean()) if _tp_m.sum() > 0 else 0.0
+            _fp_pm = _pred != "TP"
+            _fp_p = float((_dc_true_all[_fp_pm] != "TP").mean()) if _fp_pm.sum() > 0 else 1.0
+            _pass = _f1 >= POC_F1_MACRO_THRESHOLD  # F1-macro 기준 (TP Recall, FP Precision은 참고)
+            return _f1, _tp_r, _fp_p, _pass
+
+        # ── ML 단독 baseline ──
+        _ml_pred_bin_base = _ml_class_bin.copy()
+        if _suppressed_test_count > 0:
+            _ml_pred_bin_base = _np.concatenate([_ml_pred_bin_base, _np.full(_suppressed_test_count, "FP")])
+        _ml_f1_base = float(_dc_f1_fn(_dc_true_all, _ml_pred_bin_base, average="macro", zero_division=0))
+
+        # ── Grid 정의 ──
+        _MC_GRID = [0.0, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70]
+        _MM_GRID = [0.0, 0.05, 0.10, 0.15, 0.20]
+        _TP_AMB = _DEFAULT_THRESHOLDS["ml_tp_proba_ambiguous"]  # 0.40 고정
+        _TP_OV = _DEFAULT_THRESHOLDS["ml_tp_proba_override"]    # 0.60 고정
+        _RULE_CF = _DEFAULT_THRESHOLDS["rule_conf"]             # 0.85 고정
+
+        print(f"  ML 단독 F1-macro: {_ml_f1_base:.4f}")
+        print(f"  tp_proba_ambiguous={_TP_AMB}, tp_proba_override={_TP_OV}, rule_conf={_RULE_CF} (고정)")
+        print(f"\n  {'ml_conf':>8} {'ml_margin':>10} {'F1-macro':>9} {'TP_Recall':>10} {'FP_Prec':>8} {'판정':>5} {'vs ML':>7}")
+        print(f"  {'-'*8} {'-'*10} {'-'*9} {'-'*10} {'-'*8} {'-'*5} {'-'*7}")
+
+        # mc=0.0, mm=0.0 → ML passthrough (DC 개입 최소화)
+        _best_f1 = 0.0
+        _best_combo = None
+        _results_6d = []
+
+        for _mc in _MC_GRID:
+            for _mm in _MM_GRID:
+                _f1_v, _tp_r, _fp_p, _pass_v = _eval_dc_thresholds(_mc, _mm, _TP_AMB, _TP_OV, _RULE_CF)
+                _diff = _f1_v - _ml_f1_base
+                _verdict = "PASS" if _pass_v else "FAIL"
+                _marker = ""
+                if _f1_v > _best_f1 and _pass_v:
+                    _best_f1 = _f1_v
+                    _best_combo = (_mc, _mm)
+                    _marker = " *"
+                print(f"  {_mc:>8.2f} {_mm:>10.2f} {_f1_v:>9.4f} {_tp_r:>10.4f} {_fp_p:>8.4f} {_verdict:>5} {_diff:>+7.4f}{_marker}")
+                _results_6d.append({
+                    "ml_conf": _mc, "ml_margin": _mm,
+                    "f1_macro": _f1_v, "tp_recall": _tp_r, "fp_precision": _fp_p,
+                    "passes": _pass_v, "diff_vs_ml": _diff,
+                })
+
+        # PASS 조건 충족하는 최적 조합
+        if _best_combo:
+            print(f"\n  ★ 최적 임계값 (PASS 중 최고 F1): ml_conf={_best_combo[0]:.2f}, ml_margin={_best_combo[1]:.2f}, F1={_best_f1:.4f}")
+        else:
+            # PASS 없으면 F1 최고인 조합
+            _all_sorted = sorted(_results_6d, key=lambda x: -x["f1_macro"])
+            _top = _all_sorted[0]
+            print(f"\n  ⚠ PASS 충족 조합 없음. F1 최고: ml_conf={_top['ml_conf']:.2f}, ml_margin={_top['ml_margin']:.2f}, F1={_top['f1_macro']:.4f}")
+
+        # 기본 임계값으로 최종 판정 출력
+        _dc_f1_val, _dc_tp_recall, _dc_fp_precision, _dc_passes = _eval_dc_thresholds(
+            _DEFAULT_THRESHOLDS["ml_conf"], _DEFAULT_THRESHOLDS["ml_margin"],
+            _TP_AMB, _TP_OV, _RULE_CF,
+        )
+        _dc_verdict = "PASS" if _dc_passes else "FAIL"
+
+        print(f"\n  [현재 기본값] ml_conf={_DEFAULT_THRESHOLDS['ml_conf']}, ml_margin={_DEFAULT_THRESHOLDS['ml_margin']}")
+        print(f"  ML + Rule 결합 F1-macro: {_dc_f1_val:.4f}  (ML 단독: {_ml_f1_base:.4f})")
+        print(f"  TP Recall: {_dc_tp_recall:.4f}  (참고, 기준: ≥{POC_TP_RECALL_THRESHOLD})")
+        print(f"  FP Precision: {_dc_fp_precision:.4f}  (참고, 기준: ≥{POC_FP_PRECISION_THRESHOLD})")
+        print(f"  PoC 판정 (ML + Rule): {_dc_verdict}")
+    except Exception as _dc_eval_exc:
+        print(f"  [경고] DC 합산 평가 실패: {_dc_eval_exc}")
 
     # ── Step 7: 모델 저장 ──
     print(f"\n[Step 7] 모델 저장")

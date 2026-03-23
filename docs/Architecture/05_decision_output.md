@@ -4,6 +4,18 @@
 
 RULE 라벨러(S3a)와 ML 라벨러(S3b)의 결과를 결합하여, **최종 라벨 + 신뢰도 + risk_flag**를 확정한다. 이 단계에서 "TP를 FP로 보내는 리스크 최소화" 정책을 코드 레벨에서 강제한다.
 
+> **Wave 7 실측 결과 (2026-03-23, 3,962,171건 temporal split):**
+>
+> | 항목 | 값 |
+> |------|-----|
+> | ML 단독 F1-macro | **0.7914** |
+> | DC 최적 F1-macro | **0.7915** (ml_conf=0.0, ml_margin=0.0 = ML passthrough) |
+> | DC 기본값 F1-macro | 0.7746 (ml_conf=0.7, ml_margin=0.2 = **-0.017 악화**) |
+>
+> **Grid Sweep 결론:** 35개 임계값 조합 실험 결과, DC 개입 시 항상 F1 하락. ML passthrough가 최적.
+> **원인:** RULE 커버리지 0.6%, RULE-ML 중복 90.5%. "애매하면 TP" 로직이 ML의 정확한 FP 판정을 TP로 대량 전환.
+> **현재 운영 권장:** DC는 ML passthrough로 설정. RULE이 독립 신호를 확보하면(Sumologic L2 룰 활성화) 재검토.
+
 ### 9.2 결합 규칙
 
 ```python
@@ -14,9 +26,14 @@ RULE 라벨러(S3a)와 ML 라벨러(S3b)의 결과를 결합하여, **최종 라
 # Wave 5 C2: slice_thresholds (server_env별 tau) 추가 저장
 # Wave 5 C1: easy_fp_suppressor 조건도 threshold_policy.json에 포함
 # run_report.py는 threshold_policy.json을 우선 로드하여 재계산 없이 사용
+#
+# ⚠️ Wave 7 Grid Sweep 결과 (2026-03-23):
+#   ml_conf=0.0, ml_margin=0.0 (ML passthrough)가 최적.
+#   임계값을 올리면 "애매하면 TP" 로직이 ML의 정확한 FP 판정을 TP로 전환하여 F1 하락.
+#   RULE이 독립 신호를 확보할 때까지(Sumologic L2 룰 활성화) DC 개입 비활성화 권장.
 TAU_RULE_CONF = 0.85       # 룰 신뢰도 임계값
-TAU_ML_CONF = 0.70         # ML 확신 임계값
-TAU_ML_MARGIN = 0.20       # ML 마진 임계값
+TAU_ML_CONF = 0.70         # ML 확신 임계값 (⚠️ 현재 0.0 권장 — Grid Sweep)
+TAU_ML_MARGIN = 0.20       # ML 마진 임계값 (⚠️ 현재 0.0 권장 — Grid Sweep)
 TAU_ML_ENTROPY = 1.5       # ML 엔트로피 임계값
 TAU_TP_OVERRIDE = 0.40     # TP 확률 override 임계값
 

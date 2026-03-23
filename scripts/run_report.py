@@ -415,6 +415,7 @@ def main(args=None):
 
     # ── Step 2b: Decision Combiner 시뮬레이션 ──
     dc_eval_result = {}
+    _dc_final_pred = None        # DC 결합 예측 (binary TP/FP) — Step 7 PoC 판정 기준
     if model is not None and X_test is not None and not df_test.empty:
         logger.info("[Step 2b] Decision Combiner 시뮬레이션")
         try:
@@ -432,41 +433,74 @@ def main(args=None):
                 label_names=list(le.classes_),
             )
 
-            # 벡터화 Decision Combiner — 행 단위 루프 대신 일괄 처리
+            # 벡터화 Decision Combiner — decision_combiner.py 임계값과 동일
+            from src.models.decision_combiner import _DEFAULT_THRESHOLDS as _DC_THR
+
             _rule_matched = df_test["rule_matched"].values if "rule_matched" in df_test.columns else np.zeros(len(df_test), dtype=bool)
             _rule_conf = df_test["rule_confidence_lb"].values if "rule_confidence_lb" in df_test.columns else np.zeros(len(df_test))
             _rule_class = df_test["rule_primary_class"].values if "rule_primary_class" in df_test.columns else np.full(len(df_test), "")
             _rule_id = df_test["rule_id"].values if "rule_id" in df_test.columns else np.full(len(df_test), "")
 
             _ml_class = _ml_pred_df["ml_top1_class_name"].values if "ml_top1_class_name" in _ml_pred_df.columns else np.full(len(df_test), "FP")
-            _ml_proba = _ml_pred_df["ml_tp_proba"].values if "ml_tp_proba" in _ml_pred_df.columns else np.zeros(len(df_test))
+            _ml_tp_proba = _ml_pred_df["ml_tp_proba"].values if "ml_tp_proba" in _ml_pred_df.columns else np.zeros(len(df_test))
+            _ml_top1_proba = _ml_pred_df["ml_top1_proba"].values if "ml_top1_proba" in _ml_pred_df.columns else np.zeros(len(df_test))
+            _ml_margin = _ml_pred_df["ml_margin"].values if "ml_margin" in _ml_pred_df.columns else np.zeros(len(df_test))
+            _ml_entropy = _ml_pred_df["ml_entropy"].values if "ml_entropy" in _ml_pred_df.columns else np.zeros(len(df_test))
+            _ood_flag = _ml_pred_df["ood_flag"].values if "ood_flag" in _ml_pred_df.columns else np.zeros(len(df_test), dtype=bool)
 
-            # 벡터화 판정: RULE 매칭 여부 + ML 예측 결합
+            # 벡터화 판정: decision_combiner.py 4-Case 로직과 동일
             _n = len(df_test)
             _dc_primary = np.empty(_n, dtype=object)
             _dc_source = np.empty(_n, dtype=object)
             _dc_reason = np.empty(_n, dtype=object)
+            # 기본값: Case 3 Fallback (TP 안전)
+            _dc_primary[:] = "TP"
+            _dc_source[:] = "FALLBACK"
+            _dc_reason[:] = "TP_FALLBACK"
 
             _rule_hit = np.array(_rule_matched, dtype=bool)
-            _rule_high_conf = np.array(_rule_conf, dtype=float) >= 0.5
+            _rule_conf_arr = np.array(_rule_conf, dtype=float)
+            _ood_arr = np.array(_ood_flag, dtype=bool)
+
+            # Case 0: OOD → UNKNOWN
+            _case0 = _ood_arr
+            _dc_primary[_case0] = "UNKNOWN"
+            _dc_source[_case0] = "OOD"
+            _dc_reason[_case0] = "OOD"
+
+            # Case 0b: 고엔트로피 + 룰 없음 → UNKNOWN
+            _case0b = (~_case0) & (_ml_entropy >= _DC_THR["entropy_unknown"]) & (~_rule_hit)
+            _dc_primary[_case0b] = "UNKNOWN"
+            _dc_source[_case0b] = "OOD"
+            _dc_reason[_case0b] = "HIGH_ENTROPY"
 
             # Case 1: RULE 매칭 + 고확신 → RULE 결과 사용
-            _case1 = _rule_hit & _rule_high_conf
+            _case1 = (~_case0) & (~_case0b) & _rule_hit & (_rule_conf_arr >= _DC_THR["rule_conf"])
             _dc_primary[_case1] = _rule_class[_case1]
             _dc_source[_case1] = "RULE"
             _dc_reason[_case1] = "RULE_HIGH_CONFIDENCE"
 
-            # Case 2: RULE 미매칭 또는 저확신 → ML 결과 사용
-            _case2 = ~_case1
-            _dc_primary[_case2] = _ml_class[_case2]
-            _dc_source[_case2] = "ML"
-            _dc_reason[_case2] = "ML_PREDICTION"
-
-            # TP override: ML이 TP 고확신(>0.6)인데 RULE이 FP → TP로 override
-            _tp_override = _case1 & (_ml_proba > 0.6) & np.array(["FP" in str(c) for c in _rule_class])
+            # Case 1 TP override: RULE=FP인데 ML이 TP 강하게 주장 → TP 안전
+            _is_rule_fp = np.array(["FP" in str(c) for c in _rule_class])
+            _tp_override = _case1 & _is_rule_fp & (_ml_tp_proba >= _DC_THR["ml_tp_proba_override"])
             _dc_primary[_tp_override] = "TP"
             _dc_source[_tp_override] = "ML_OVERRIDE"
-            _dc_reason[_tp_override] = "RULE_ML_CONFLICT"
+            _dc_reason[_tp_override] = "TP_SAFETY"
+
+            # Case 2: ML 고확신 → ML 결과 사용
+            _remaining = (~_case0) & (~_case0b) & (~_case1)
+            _ml_confident = _remaining & (_ml_top1_proba >= _DC_THR["ml_conf"]) & (_ml_margin >= _DC_THR["ml_margin"])
+            _dc_primary[_ml_confident] = _ml_class[_ml_confident]
+            _dc_source[_ml_confident] = "ML"
+            _dc_reason[_ml_confident] = "ML_CONFIDENT"
+
+            # Case 2b: ML 애매 + TP 신호 → TP 안전
+            _ambiguous = _remaining & (~_ml_confident) & (_ml_tp_proba >= _DC_THR["ml_tp_proba_ambiguous"])
+            _dc_primary[_ambiguous] = "TP"
+            _dc_source[_ambiguous] = "ML_TP_OVERRIDE"
+            _dc_reason[_ambiguous] = "TP_SAFETY"
+
+            # Case 3: 나머지 → 기본값(TP Fallback) 유지
 
             _dc_df = pd.DataFrame({
                 "primary_class": _dc_primary,
@@ -497,6 +531,9 @@ def main(args=None):
                 for c in y_pred_test
             ])
             _ml_f1_val = float(_dc_f1(_dc_true_bin, _ml_pred_bin, average="macro"))
+
+            # DC 결합 예측을 PoC 판정 기준으로 사용
+            _dc_final_pred = _dc_pred_bin
 
             dc_eval_result = {
                 "dc_f1": _dc_f1_val,
@@ -529,8 +566,20 @@ def main(args=None):
         logger.info("  Rule 컬럼 없음 (rule_matched/rule_id/rule_primary_class)")
 
     # ── Step 7: 핵심 지표 ──
-    logger.info("[Step 7] 핵심 지표")
-    poc_criteria = check_poc_criteria(y_test, y_pred_test, tp_label=tp_label)
+    # PoC 판정 기준: ML + Rule 결합(Decision Combiner) 결과
+    # DC 시뮬레이션 성공 시 _dc_final_pred 사용, 실패 시 ML 단독 fallback
+    if _dc_final_pred is not None:
+        logger.info("[Step 7] 핵심 지표 (기준: ML + Rule 결합)")
+        # DC 결과는 binary ("TP"/"FP"), y_test도 binary로 맞춤
+        _y_test_bin = np.array([
+            "TP" if "TP" in str(c) else "FP" for c in y_test
+        ])
+        poc_criteria = check_poc_criteria(
+            _y_test_bin, _dc_final_pred, tp_label="TP",
+        )
+    else:
+        logger.info("[Step 7] 핵심 지표 (기준: ML 단독 — DC 미적용)")
+        poc_criteria = check_poc_criteria(y_test, y_pred_test, tp_label=tp_label)
     binary_stats = compute_binary_stats(df_label, label_col=label_col)
     class_imbalance = compute_class_imbalance(df_label, label_col=label_col)
     # Coverage-Precision Curve: training이 저장한 threshold_policy.json 우선 사용
@@ -567,22 +616,31 @@ def main(args=None):
         rule_contribution = compute_rule_contribution(rule_labels_df, y_test, tp_label=tp_label)
         class_rule_contribution = compute_class_rule_contribution(rule_labels_df)
 
-    # 오분류 분석
+    # 오분류 분석 — DC 결합 결과 기준 (없으면 ML 단독 fallback)
     error_patterns = []
     error_samples = pd.DataFrame()
     try:
         from collections import Counter
-        errors_mask = y_test != y_pred_test
+        if _dc_final_pred is not None:
+            _y_test_bin_ea = np.array([
+                "TP" if "TP" in str(c) else "FP" for c in y_test
+            ])
+            errors_mask = _y_test_bin_ea != _dc_final_pred
+        else:
+            errors_mask = y_test != y_pred_test
         if errors_mask.sum() > 0:
-            pairs = list(zip(y_test[errors_mask], y_pred_test[errors_mask]))
+            _ea_true = _y_test_bin_ea if _dc_final_pred is not None else y_test
+            _ea_pred = _dc_final_pred if _dc_final_pred is not None else y_pred_test
+            pairs = list(zip(_ea_true[errors_mask], _ea_pred[errors_mask]))
             error_patterns = [(a, p, c) for (a, p), c in Counter(pairs).most_common(15)]
             edf = df_test[errors_mask].copy()
-            edf["actual_class"] = y_test[errors_mask]
-            edf["predicted_class"] = y_pred_test[errors_mask]
+            edf["actual_class"] = _ea_true[errors_mask]
+            edf["predicted_class"] = _ea_pred[errors_mask]
             error_samples = edf.head(200)
     except Exception:
         pass
 
+    # class_metrics는 ML 단독 기준 유지 (DC 결합과 별도로 ML 성능 추적용)
     class_metrics = compute_class_metrics(y_test, y_pred_test, tp_label=tp_label)
     org_stats = compute_org_stats(df_label, label_col=label_col)
     confidence_dist = compute_confidence_distribution(ml_proba_test)
@@ -619,11 +677,23 @@ def main(args=None):
     _train_idx_for_report = list(range(_n_train))
     _test_idx_for_report = list(range(_n_train, _n_train + _n_test))
 
+    # Primary split 평가: DC 결합 결과가 있으면 DC 기준, 없으면 ML 단독
+    _primary_y_pred = y_pred_test
+    _primary_tp_label = tp_label
+    if _dc_final_pred is not None:
+        # DC 결과(binary TP/FP)와 정답을 binary로 맞춤
+        _primary_y_pred = _dc_final_pred
+        _primary_tp_label = "TP"
+        # y_true_all도 binary로 변환 (test 구간)
+        y_true_all = np.array([
+            "TP" if "TP" in str(c) else "FP" for c in y_true_all
+        ])
+
     split_results = [
         _build_primary_eval(
             df_label, _train_idx_for_report, _test_idx_for_report,
-            y_true_all, y_pred_test,
-            tp_label=tp_label,
+            y_true_all, _primary_y_pred,
+            tp_label=_primary_tp_label,
             coverage_at_target=coverage_curve.get("recommended_tau") or 0.0,
         )
     ]
@@ -639,7 +709,18 @@ def main(args=None):
     run_metadata = _build_run_metadata(model_path_for_meta, df_label)
     run_metadata["note"] = "체크포인트 기반 평가 (run_training.py와 동일 피처/split)"
     business_impact = _build_business_impact(binary_stats, coverage_curve)
-    error_risk_summary = _build_error_risk_summary(y_test, y_pred_test, tp_label=tp_label)
+    # 오분류 위험도: DC 결합 결과 기준 (없으면 ML 단독 fallback)
+    if _dc_final_pred is not None:
+        _y_test_bin_err = np.array([
+            "TP" if "TP" in str(c) else "FP" for c in y_test
+        ])
+        error_risk_summary = _build_error_risk_summary(
+            _y_test_bin_err, _dc_final_pred, tp_label="TP",
+        )
+    else:
+        error_risk_summary = _build_error_risk_summary(
+            y_test, y_pred_test, tp_label=tp_label,
+        )
 
     # ── Step 9: 진단 (선택) ──
     diag_results = {

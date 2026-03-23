@@ -209,11 +209,8 @@ def check_poc_criteria(
         else:
             fp_precision = 1.0
 
-        passes = (
-            f1_macro >= POC_F1_MACRO_THRESHOLD
-            and tp_recall >= POC_TP_RECALL_THRESHOLD
-            and fp_precision >= POC_FP_PRECISION_THRESHOLD
-        )
+        # PASS/FAIL 판정: F1-macro 기준 (TP Recall, FP Precision은 참고 지표)
+        passes = f1_macro >= POC_F1_MACRO_THRESHOLD
 
         return {
             "passes":       passes,

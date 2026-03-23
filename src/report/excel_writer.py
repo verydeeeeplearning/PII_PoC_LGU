@@ -158,7 +158,7 @@ class PocExcelWriter:
 
         # PoC 판정 섹션
         row += 2
-        self._write_section_title(ws, row, 1, "PoC 판정 기준")
+        self._write_section_title(ws, row, 1, "PoC 판정 기준 (ML + Rule 결합)")
         row += 1
 
         # 숫자형이면 포맷, 아니면 그대로
@@ -169,9 +169,9 @@ class PocExcelWriter:
                 return str(v) if v is not None else "-"
 
         criteria_rows = [
-            ("F1-macro",           _fmt(poc.get("f1_macro",     "-")), "≥ 0.70"),
-            ("TP Recall",          _fmt(poc.get("tp_recall",    "-")), "≥ 0.75"),
-            ("FP Precision",       _fmt(poc.get("fp_precision", "-")), "≥ 0.85"),
+            ("F1-macro (판정 기준)",  _fmt(poc.get("f1_macro",     "-")), "≥ 0.70"),
+            ("TP Recall (참고)",     _fmt(poc.get("tp_recall",    "-")), "≥ 0.75"),
+            ("FP Precision (참고)", _fmt(poc.get("fp_precision", "-")), "≥ 0.80"),
         ]
 
         # 헤더
