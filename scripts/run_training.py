@@ -452,19 +452,19 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
             else:
                 _old_stats = {}
 
-            _updated = {**_old_stats}
+            # 비교 출력 (원본 rule_stats.json은 수정하지 않음 — ML 피처 안정성)
             for _rid, _ns in _new_stats.items():
                 _old_lb = _old_stats.get(_rid, {}).get("precision_lb", 0.5)
                 _diff = abs(_ns["precision_lb"] - _old_lb)
                 _marker = " ⚠️ 큰 편차!" if _diff > 0.2 else ""
                 print(f"  {_rid}: N={_ns['N']:,}, M={_ns['M']:,}, "
-                      f"lb={_ns['precision_lb']:.3f} (이전: {_old_lb:.3f}){_marker}")
-                _updated[_rid] = _ns
+                      f"lb={_ns['precision_lb']:.3f} (기준: {_old_lb:.3f}){_marker}")
 
-            # 저장
-            with open(rule_stats_path, "w", encoding="utf-8") as _f:
-                _json_rs.dump(_updated, _f, ensure_ascii=False, indent=2)
-            print(f"  rule_stats.json 갱신 완료: {rule_stats_path}")
+            # 실측 통계를 별도 파일로 저장 (원본 rule_stats.json 보존)
+            _measured_path = rule_stats_path.parent / "rule_stats_measured.json"
+            with open(_measured_path, "w", encoding="utf-8") as _f:
+                _json_rs.dump(_new_stats, _f, ensure_ascii=False, indent=2)
+            print(f"  실측 통계 저장: {_measured_path.name} (원본 rule_stats.json 미변경)")
         else:
             print("  룰 매칭 건 없음 — rule_stats 갱신 생략")
 
@@ -512,8 +512,8 @@ def _run_label_mode(args, source_path: "Path | None" = None) -> None:
             "rule_confidence_lb",
             # [Tier 2 B9] file-level aggregation (파이프라인에서 계산)
             "file_event_count", "file_pii_diversity",
-            # 파일 크기
-            "file_size", "file_size_log1p",
+            # file_size: Label 데이터에서 전부 결측 → 노이즈 피처. Sumologic/Joined에서만 활용.
+            # "file_size", "file_size_log1p",
         ]
         _keep = [c for c in _KEEP_COLS if c in df.columns]
         df_for_features = df[_keep]

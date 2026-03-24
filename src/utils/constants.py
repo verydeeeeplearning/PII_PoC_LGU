@@ -119,9 +119,9 @@ LGB_DEFAULT_PARAMS: dict = {
     "learning_rate": 0.1,
     "subsample": 0.8,
     "colsample_bytree": 0.8,
-    "min_child_samples": 200,       # [Tier 2 B6] 20→200: 일반화 강제, 리프당 최소 샘플 수 증가
-    "reg_alpha": 0.5,               # [Tier 2 B6] 0→0.5: L1 정규화, 노이즈 피처 가중치 억제
-    "max_depth": 10,                # [Tier 2 B6] -1→10: 트리 깊이 제한, 과적합 방지
+    "min_child_samples": 200,       # [Tier 2 B6] 일반화 강제
+    "reg_alpha": 0.5,               # [Tier 2 B6] L1 정규화
+    "max_depth": 10,                # [Tier 2 B6] 트리 깊이 제한
     "n_jobs": -1,
     "verbose": -1,
 }
