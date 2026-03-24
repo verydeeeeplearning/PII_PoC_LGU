@@ -446,9 +446,8 @@ class AutoRetrainer:
 > **PoC 게이트 (Wave 7 변경, 2026-03-23):**
 > - **PASS/FAIL 판정: F1-macro ≥ 0.70 단독 기준** (TP Recall, FP Precision은 참고 지표)
 > - TP Recall ≥ 0.75 (참고), FP Precision ≥ 0.80 (참고, 기존 0.85에서 완화)
-> - 판정 기준이 ML + Rule 결합(Decision Combiner) 결과 기반
-> - Wave 7 Grid Sweep 결과: DC 개입 시 F1 하락 → ML passthrough 권장 → 실질적으로 ML 단독 F1이 판정 기준
-> - 실측: F1-macro 0.7914 (temporal split, 3,962,171건) → **PASS**
+> - 판정 기준은 ML 단독 F1 (DC 개입 시 항상 F1 하락 확인 → DC 시트 제거, DC 시뮬레이션 비활성화)
+> - 실측: F1-macro **0.779** (temporal split, 10M행 서버 검증, 4c5e4ed 기준) → **PASS**
 
 **Coverage-Precision 트레이드오프 곡선:**
 
@@ -878,7 +877,7 @@ Step 7:  핵심 지표 (F1, PoC 판정, Coverage-Precision)
 Step 7b: eval 고유 산출물 (confusion_matrix.png, feature_importance.csv/png, error_analysis.csv)
 Step 8:  Secondary / Tertiary Split 성능 계산
 Step 9:  데이터 진단 (--include-diagnosis 시: Column Registry, Split Robustness, Ablation)
-Step 10: PocExcelWriter → 10-sheet Excel + 개별 산출물 (Sheet 10: Decision Combiner RULE+ML 통합 평가)
+Step 10: PocExcelWriter → 9-sheet Excel + 개별 산출물 (DC 시트 제거됨 — Wave 7 검증 결과 DC 개입 무효)
 ```
 
 **source별 모델/데이터 경로:**
@@ -905,7 +904,7 @@ Step 10: PocExcelWriter → 10-sheet Excel + 개별 산출물 (Sheet 10: Decisio
 
 ---
 
-### 23.4 9-Sheet 구성 (2026-03-20 확장)
+### 23.4 9-Sheet 구성 (2026-03-24 갱신, DC 시트 제거)
 
 | 시트명 | 데이터 출처 | 포함 항목 |
 |--------|------------|-----------|
